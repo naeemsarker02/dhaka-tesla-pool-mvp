@@ -14,6 +14,8 @@ router.post(
   teslaController.register
 );
 
+router.get("/me", requireAuth, requireRole("DRIVER"), teslaController.getMine);
+
 router.patch(
   "/:id/status",
   requireAuth,

@@ -30,9 +30,14 @@ export function NavBar() {
           </>
         )}
         {user?.role === "DRIVER" && (
-          <Link href="/driver" className="text-slate-600 hover:text-slate-900">
-            Driver Console
-          </Link>
+          <>
+            <Link href="/driver" className="text-slate-600 hover:text-slate-900">
+              Driver Console
+            </Link>
+            <Link href="/driver/history" className="text-slate-600 hover:text-slate-900">
+              History
+            </Link>
+          </>
         )}
         {user ? (
           <>

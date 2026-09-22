@@ -18,4 +18,13 @@ async function updateStatus(req, res, next) {
   }
 }
 
-module.exports = { register, updateStatus };
+async function getMine(req, res, next) {
+  try {
+    const tesla = await teslaService.getMyTesla(req.user.id);
+    res.status(200).json(tesla);
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { register, updateStatus, getMine };
