@@ -68,3 +68,31 @@ pool, singular).
 **Practical impact on this MVP:** with only one Tesla (Bullet) in the seed data, this invariant
 rarely binds in the demo itself, but it's the technically correct rule and is very likely to come
 up as an interview question ("what stops a driver double-booking?").
+
+---
+
+### 8. Next.js pinned to `^14.2.35`, not `^14.2.5` (2026-09-22)
+
+**Context:** Phase 1 scaffold. `npm audit` on a fresh `frontend` install with `next@14.2.5` (the
+version first scaffolded) reported a critical/high set of Next.js advisories (RSC cache poisoning,
+SSRF in Server Actions/rewrites, an unauthenticated RCE on Windows-hosted servers, among others).
+`npm audit fix --force` offered to resolve them only by jumping to `next@16`, a breaking major
+version change not justified for an MVP scaffold.
+
+**Decision:** bumped to `next@^14.2.35` (the latest 14.x patch release at the time), which
+resolves the Next.js-authored advisories while staying on the same major version the master plan
+specified (App Router). One remaining high-severity `postcss` advisory lives inside `next`'s own
+bundled `node_modules/postcss` (not the project's top-level `postcss` devDependency) and has no
+fix short of the Next 16 major bump — accepted as a build-tool-only, not runtime-exposed, MVP
+risk. Revisit if a stricter security bar is required for submission.
+
+### 9. `bcrypt` native build has an unresolved transitive `tar` advisory (2026-09-22)
+
+**Context:** Phase 1 scaffold. `npm audit` on `backend` reports a critical/high advisory in `tar`,
+pulled in transitively by `@mapbox/node-pre-gyp`, which `bcrypt` uses only to build/install its
+native bindings (not a runtime dependency of the running server).
+
+**Decision:** left `bcrypt` as specified in `MASTER_PLAN.md` §1 rather than substituting the
+pure-JS `bcryptjs` to sidestep the advisory — that would be a library swap without approval for a
+build-time-only exposure. Logged here as a known issue; revisit only if it becomes a real blocker
+(e.g. a CI security gate) rather than silently changing the dependency.
