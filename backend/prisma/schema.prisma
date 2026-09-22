@@ -1,6 +1,6 @@
 // Prisma schema — MySQL provider, per MASTER_PLAN.md Section 1.
 // Built incrementally, phase by phase, per MASTER_PLAN.md Section 8 — do not add models for a
-// later phase ahead of time (e.g. no ride_requests/pools/pool_memberships until Phases 3-4).
+// later phase ahead of time (e.g. no pools/pool_memberships until Phase 4).
 
 generator client {
   provider = "prisma-client-js"
@@ -34,7 +34,8 @@ model User {
   phone        String
   createdAt    DateTime @default(now()) @map("created_at")
 
-  tesla Tesla?
+  tesla        Tesla?
+  rideRequests RideRequest[]
 
   @@map("users")
 }
@@ -53,4 +54,55 @@ model Tesla {
   driver User @relation(fields: [driverId], references: [id])
 
   @@map("teslas")
+}
+
+enum RideRequestStatus {
+  REQUESTED
+  MATCHED
+  DRIVER_ARRIVED
+  STARTED
+  COMPLETED
+  CANCELLED
+
+  @@map("ride_request_status")
+}
+
+// zones.cluster is a flat, single-column grouping (docs/decisions.md item 5) — no zone_distance
+// table; zone-to-zone distance is a hardcoded JS map instead (src/data/zones.js), per
+// MASTER_PLAN.md Section 5's "JS constant map" option.
+model Zone {
+  id      String @id @default(uuid())
+  name    String @unique
+  cluster String
+
+  pickupRequests      RideRequest[] @relation("PickupZone")
+  destinationRequests RideRequest[] @relation("DestinationZone")
+
+  @@map("zones")
+}
+
+// No pool_id column here — pool_memberships is the sole relationship to pools (Phase 4),
+// per docs/erd.md. estimated_fare_paisa is set at creation (no discount); fare_paisa starts
+// NULL and is finalized once, at pool MATCHED (docs/fare-model.md).
+model RideRequest {
+  id                 String            @id @default(uuid())
+  passengerId        String            @map("passenger_id")
+  pickupZoneId       String            @map("pickup_zone_id")
+  destinationZoneId  String            @map("destination_zone_id")
+  seatsRequested     Int               @map("seats_requested")
+  status             RideRequestStatus @default(REQUESTED)
+  estimatedFarePaisa Int               @map("estimated_fare_paisa")
+  farePaisa          Int?              @map("fare_paisa")
+  requestedAt        DateTime          @default(now()) @map("requested_at")
+  matchedAt          DateTime?         @map("matched_at")
+  arrivedAt          DateTime?         @map("arrived_at")
+  startedAt          DateTime?         @map("started_at")
+  completedAt        DateTime?         @map("completed_at")
+  cancelledAt        DateTime?         @map("cancelled_at")
+
+  passenger       User @relation(fields: [passengerId], references: [id])
+  pickupZone      Zone @relation("PickupZone", fields: [pickupZoneId], references: [id])
+  destinationZone Zone @relation("DestinationZone", fields: [destinationZoneId], references: [id])
+
+  @@map("ride_requests")
 }
