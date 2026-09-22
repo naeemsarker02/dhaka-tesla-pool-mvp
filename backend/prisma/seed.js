@@ -1,6 +1,7 @@
 require("dotenv").config();
 const bcrypt = require("bcrypt");
 const { PrismaClient } = require("@prisma/client");
+const { ZONES } = require("../src/data/zones");
 
 const prisma = new PrismaClient();
 
@@ -48,7 +49,16 @@ async function main() {
     });
   }
 
+  for (const zone of ZONES) {
+    await prisma.zone.upsert({
+      where: { name: zone.name },
+      update: { cluster: zone.cluster },
+      create: zone,
+    });
+  }
+
   console.log("Seeded: Jashim (driver) + Bullet (Tesla, capacity 3) + Nusrat/Rafiq/Shirin (passengers).");
+  console.log(`Seeded ${ZONES.length} zones.`);
   console.log(`All seed accounts use password: ${SEED_PASSWORD}`);
 }
 
