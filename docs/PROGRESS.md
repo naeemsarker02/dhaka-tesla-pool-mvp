@@ -365,5 +365,71 @@ cleanly.
 **Known issues / unresolved:** none blocking. `GET /api/driver/pools/:id` intentionally deferred to
 Phase 6 (`docs/decisions.md` item 16).
 
-**Next task:** Phase 5 — `feature/capacity-enforcement` (row-locked `SELECT ... FOR UPDATE`
-seat-claim transaction, concurrency test for the last-seat race).
+**~~Merged into `master`~~** — merged `--no-ff` (`8fcefce`) and pushed.
+
+**Next task:** Phase 5 — see below.
+
+---
+
+## Phase 5 — `feature/capacity-enforcement`
+
+**Status:** Complete on branch `feature/capacity-enforcement`. Per the user's instruction to
+proceed continuously, merges straight into `master` without a per-phase confirmation pause.
+
+**What was implemented:**
+- **Row-locked seat claim** (`matchingService.tryClaimSeatInPool`): rewrote the Phase 4 pool-join
+  path to use the exact `MASTER_PLAN.md` §6 pattern — `tx.$queryRaw` `SELECT seats_occupied FROM
+  pools WHERE id = ? FOR UPDATE` inside the transaction, re-checking capacity against the freshly
+  locked value (not the earlier unlocked search result), then `tx.$executeRaw` to increment. A
+  lost race returns `false` internally rather than throwing — the caller falls through to try a
+  new pool instead of failing ride-request creation (`docs/decisions.md` item 17).
+- **Row-locked Tesla selection** (`matchingService.findEligibleOnlineTesla`): also switched to
+  `SELECT ... FOR UPDATE` on candidate online `teslas` rows, closing the matching race on the
+  one-active-pool-per-Tesla invariant (item 7) that locking only `pools` would have left open.
+- **Integration test track:** `backend/tests/integration/concurrency.test.js`, run via
+  `npm run test:integration` against the real Prisma client and a live database — never mocked,
+  never part of default `npm test` (`jest.config.js` now ignores `tests/integration/`;
+  `jest.integration.config.js` is the dedicated config). `tests/setupEnv.js` now loads `.env` first
+  so this suite gets the real `DATABASE_URL`.
+- Updated the Phase 4 mocked unit tests (`ride.test.js`, `pool.test.js`) for the new
+  `$queryRaw`/`$executeRaw`-based transaction internals, and added a new `pool.test.js` case for
+  the "lost the race, falls through to unpooled" path.
+
+**Files changed:** `backend/src/services/matchingService.js` (rewritten locking logic),
+`backend/tests/{ride,pool}.test.js` (mock updates), `backend/tests/integration/concurrency.test.js`
+(new), `backend/jest.config.js`, `backend/jest.integration.config.js` (new),
+`backend/tests/setupEnv.js`, `backend/package.json` (`test:integration` script).
+
+**Tests added:** `pool.test.js` +1 case (lost-race fallback). New
+`tests/integration/concurrency.test.js` — real-DB race: seeds a pool to 1-seat-from-capacity, races
+two concurrent `matchRideRequest` calls for the last seat via `Promise.all`, asserts exactly one
+wins and `seats_occupied` never exceeds capacity.
+
+**Tests passed/failed:** `npm test` → **42/42 passed** (unit, mocked). `npm run test:integration`
+→ **1/1 passed**, confirmed deterministic across **5 consecutive runs** after a test-isolation fix
+(see below). All changed/new files pass `node --check`.
+
+**Real-database verification:**
+- Raw locking behavior confirmed directly, outside the app: two manual `$transaction` calls, one
+  sleeping mid-transaction while holding `FOR UPDATE`; the second's locking read correctly blocked
+  until the first committed, then saw the incremented value — proves MariaDB/InnoDB `FOR UPDATE`
+  is actually serializing these transactions, not just syntactically present.
+- **A real bug the integration test caught (not a locking bug):** the first integration-test run
+  failed — investigation showed the losing race participant correctly fell back to opening a new
+  pool on the seeded `Bullet` (which was legitimately online with no active pool at that moment) —
+  correct production behavior, but it broke the test's implicit assumption that no other eligible
+  Tesla existed. Fixed by having the test temporarily take other online Teslas offline for its
+  duration, restored afterward — 5/5 deterministic passes since. Full account: `docs/decisions.md`
+  item 18.
+- Verified Bullet's status was correctly restored to `ONLINE` and no stray pools remained after
+  the test-fixing process (one orphaned pool from the initial failed run was manually cleared).
+
+**Documentation updated:** This file; `docs/decisions.md` items 17–18.
+
+**Known issues / unresolved:** none blocking. `MASTER_PLAN.md` §6/§8's "return 409 on overbooking"
+framing doesn't map 1:1 onto this codebase's automatic-matching design (no dedicated claim-seat
+endpoint exists) — resolved as a graceful internal fallback instead, reasoned through in
+`docs/decisions.md` item 17.
+
+**Next task:** Phase 6 — `feature/ride-lifecycle` (state-machine transition guards,
+`PATCH /api/driver/pools/:poolId/status` cascade, `POST /api/rides/:id/cancel`).

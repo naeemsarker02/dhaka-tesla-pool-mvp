@@ -202,3 +202,59 @@ earlier plan. `GET /api/driver/requests` already returns each `OPEN` pool's full
 (passengers, seats, zones), so nothing driver-facing is currently missing — a single-pool detail
 view is a natural companion to add alongside Phase 6's status-cascade endpoint instead of as a
 standalone addition now.
+
+---
+
+### 17. Lost seat-claim race falls back gracefully, never a public 409 (2026-09-23)
+
+**Context:** Phase 5. `MASTER_PLAN.md` §6's code sample frames the row-locked capacity check as a
+dedicated "claim seat" operation that throws `SeatsUnavailableError` on overbooking, and §8's Phase
+5 checklist says "Return 409 on overbooking attempt." But this codebase has no dedicated claim-seat
+endpoint — per §7's own contract table, matching is fully automatic, run inside `POST /api/rides`
+right after the ride request is created (Phase 3/4). Failing the whole ride-request creation with
+409 just because a candidate pool happened to fill up in the same instant would be worse UX and
+inconsistent with the already-established (Phase 4) rule that an unmatched request simply stays
+`REQUESTED` with no `pool_membership`.
+
+**Decision:** `matchingService.matchRideRequest` still uses the exact §6 `SELECT ... FOR UPDATE`
+pattern for the actual seat-claim write, but a lost race is handled as an internal `false` return,
+not a thrown/propagated error — the caller then falls through to try opening a new pool on another
+eligible Tesla, or leaves the request unpooled if none exists. `POST /api/rides` always returns 201
+for a valid request; whether it ended up pooled is a `pooled`/`poolId` implementation detail, not a
+user-facing failure. The underlying correctness guarantee §6 actually cares about —
+`seats_occupied` can never exceed `tesla.capacity` under concurrency — is what's tested (item 18
+below), not the specific "409" transport detail from a code sample written for a different
+endpoint shape.
+
+**Also locked, for the same reason:** new-pool Tesla selection (`findEligibleOnlineTesla`) now uses
+`SELECT ... FOR UPDATE` on candidate online `teslas` rows too, not just `pools` — closing the
+matching race for the one-active-pool-per-Tesla invariant (item 7) that a pools-only lock would
+have left open (two concurrent ride requests could otherwise both decide the same idle Tesla is
+free and each create a competing pool for it).
+
+### 18. Concurrency correctness proven with a real-database integration test, not mocks (2026-09-23)
+
+**Context:** Phase 5's required test ("simulate Nusrat + Shirin racing for the last seat... assert
+exactly one succeeds and seats_occupied never exceeds capacity") is fundamentally about MySQL/
+InnoDB row-lock behavior, which a mocked Prisma client cannot simulate — a mock can't reproduce a
+second transaction actually blocking on `FOR UPDATE` until the first commits.
+
+**Decision:** added `backend/tests/integration/concurrency.test.js`, run via a separate
+`npm run test:integration` (its own `jest.integration.config.js`), using the **real** Prisma
+client against the developer's live MySQL/MariaDB instance — never mocked, and never part of the
+default `npm test` run (so unit tests stay runnable with no DB available, consistent with
+`docs/decisions.md` item 11). It creates its own isolated Tesla/users, seeds a pool to 1 seat away
+from capacity, then races two concurrent `matchRideRequest` calls for that last seat via
+`Promise.all` and asserts exactly one wins and `seats_occupied` never exceeds capacity.
+
+**A real bug this caught, worth recording:** the first run failed — one race participant ended up
+`pooled: true` with a *different* `poolId` than expected. Investigation showed this wasn't a
+locking bug at all: `findEligibleOnlineTesla` correctly searches *all* online Teslas system-wide
+(matching real intended behavior — a losing seat-claim should legitimately fall back to any other
+eligible Tesla, not just the one in the test), and the seeded `Bullet` was online with no active
+pool at that moment, so the losing participant correctly opened a new pool on it. The test's
+isolation assumption was wrong, not the application logic. Fixed by having the test temporarily
+set any *other* online Teslas offline for its duration (restored in `afterAll`) so its own fixture
+Tesla is deterministically the only eligible fallback. Raw `SELECT ... FOR UPDATE` blocking
+behavior was separately confirmed directly (two transactions, one sleeping mid-transaction, the
+second's locking read correctly stalled until the first committed and then saw the updated value).
