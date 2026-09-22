@@ -508,5 +508,76 @@ valid lifecycle passes for a pooled pair" requirement:**
 
 **Known issues / unresolved:** none blocking.
 
-**Next task:** Phase 7 — `feature/frontend-passenger-flow` (Next.js signup/login, request-ride
-form, status tracking, ride history).
+**~~Merged into `master`~~** — merged `--no-ff` (`cf06864`) and pushed.
+
+**Next task:** Phase 7 — see below.
+
+---
+
+## Phase 7 — `feature/frontend-passenger-flow`
+
+**Status:** Complete on branch `feature/frontend-passenger-flow`, verified live in a real browser
+against the real running backend (not just a production build check).
+
+**What was implemented:**
+- **`lib/api.js`:** thin `fetch` wrapper (`apiFetch`), `ApiError` class carrying HTTP status +
+  Zod `details`.
+- **`lib/AuthContext.js`:** React context holding `{ token, user }`, persisted to `localStorage`
+  (`docs/decisions.md` item 4), restored on mount behind an `isLoading` flag so a page refresh
+  doesn't bounce a logged-in user before the restore finishes. Exposes `signup`/`login`/`logout`.
+  Wired into the app via `app/providers.js` (client component) imported from the (server) root
+  `app/layout.js`.
+- **`components/RequireAuth.js`:** auth/role guard — waits for `isLoading`, redirects to `/login`
+  if no token, redirects to `/` if the role doesn't match. Every auth-aware page is a client
+  component (`"use client"`) fetching after mount, per the no-SSR-auth rule.
+- **`components/NavBar.js`, `components/StatusBadge.js`, `lib/format.js`** (paisa → ৳X.XX,
+  integer-only, no float math in the display layer either).
+- **Pages:** `/signup`, `/login` (role selector, demo-credentials hint), `/rides/new`
+  (pickup/destination dropdowns from live `GET /api/zones`, seats input, same-zone client guard),
+  `/rides` (history list, empty/loading/error states), `/rides/[id]` (status detail, estimated vs.
+  finalized fare, cancel button shown only when `REQUESTED`/`MATCHED`, polls every 5s while
+  non-terminal and stops once `COMPLETED`/`CANCELLED`). `/` shows role-appropriate links.
+- **Backend tweak:** `rideService.getRideRequestById`/`listRideRequestsForPassenger` now
+  `include: { pickupZone, destinationZone }` so the frontend can show zone names instead of raw
+  UUIDs — verified no existing test asserted exact response shape (`node --check` + `npm test`
+  re-run confirmed no regression, still 57/57).
+
+**Files changed:** `frontend/lib/{api,AuthContext,format}.js` (new),
+`frontend/components/{RequireAuth,NavBar,StatusBadge}.js` (new), `frontend/app/providers.js`
+(new), `frontend/app/layout.js`, `frontend/app/page.js`, `frontend/app/{signup,login}/page.js`
+(new), `frontend/app/rides/page.js` (new), `frontend/app/rides/new/page.js` (new),
+`frontend/app/rides/[id]/page.js` (new), `backend/src/services/rideService.js`.
+
+**Tests passed/failed:** Backend regression: `npm test` → **57/57 passed** (unchanged, confirms
+the zone-include tweak didn't break anything). Frontend: `npx next build` → clean production build,
+all 7 routes compiled (no TypeScript in this repo, so this build is the closest thing to a
+type/syntax check across the whole frontend).
+
+**Real, in-browser verification (Chrome, real backend on :4000, frontend dev server on :3001 —
+port 3000 was occupied) — this is UI verification, not just a build check:**
+- Logged in as Nusrat (seed credentials) → correctly redirected to `/rides`, empty state shown
+  correctly ("You haven't requested any rides yet").
+- `/rides/new` loaded the real 8 zones from `GET /api/zones` live; requested Banani → Mohakhali,
+  submitted → redirected to `/rides/[id]` showing **`REQUESTED`**, **estimated fare ৳75.00** — the
+  exact paisa-to-taka conversion of the real `7500` paisa the backend computed (3km × ৳15/km + ৳30
+  base), confirming the display-layer formatting is correct end-to-end, not just visually
+  plausible.
+- Clicked "Cancel this ride" → status updated to `CANCELLED` in place, cancel button correctly
+  disappeared (state machine respected client-side too).
+- `/rides` history list correctly showed the cancelled ride with its status badge and formatted
+  fare.
+- Logged out, then navigated directly to `/rides` while unauthenticated → `RequireAuth` correctly
+  redirected to `/login` (confirms the guard works on direct navigation, not just via in-app
+  links).
+- No console errors observed during the flow (`read_console_messages`, `onlyErrors: true`).
+- All test ride/pool/history data created during this verification pass was cleared from the
+  database afterward; both dev servers stopped cleanly.
+
+**Documentation updated:** This file.
+
+**Known issues / unresolved:** none blocking. No loading-skeleton polish (plain "Loading…" text) —
+functionally correct, acceptable for an MVP; could be revisited for visual polish later, not a
+functional gap. Passenger flow only — driver UI is Phase 8.
+
+**Next task:** Phase 8 — `feature/frontend-driver-flow` (online/offline toggle, pending pool list,
+accept → passenger/seat view → arrived/start/complete buttons, trip history).

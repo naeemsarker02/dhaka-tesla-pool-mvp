@@ -45,7 +45,10 @@ async function createRideRequest(passengerId, { pickupZoneId, destinationZoneId,
 }
 
 async function getRideRequestById(passengerId, rideRequestId) {
-  const rideRequest = await prisma.rideRequest.findUnique({ where: { id: rideRequestId } });
+  const rideRequest = await prisma.rideRequest.findUnique({
+    where: { id: rideRequestId },
+    include: { pickupZone: true, destinationZone: true },
+  });
 
   if (!rideRequest) {
     throw new ValidationError("Ride request not found");
@@ -60,6 +63,7 @@ async function getRideRequestById(passengerId, rideRequestId) {
 async function listRideRequestsForPassenger(passengerId) {
   return prisma.rideRequest.findMany({
     where: { passengerId },
+    include: { pickupZone: true, destinationZone: true },
     orderBy: { requestedAt: "desc" },
   });
 }

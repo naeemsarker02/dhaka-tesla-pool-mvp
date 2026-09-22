@@ -5,10 +5,9 @@
 A ride-pooling MVP built for the RoBenDevs Software Engineer assessment. Passengers request rides
 between predefined Dhaka zones; compatible requests are pooled into a single Tesla trip so riders
 share a car (and split part of the cost) while still tracking their own fare and status
-individually. **Current state: backend feature-complete through Phase 6 (auth, Tesla registration,
-ride requests + fare estimation, pooling/matching, row-locked capacity enforcement, and the full
-ride lifecycle including cancellation), all verified against a real MySQL/MariaDB instance. Phase 7
-(frontend) not started yet.**
+individually. **Current state: backend feature-complete through Phase 6, all verified against a
+real MySQL/MariaDB instance. Passenger frontend (Phase 7) implemented and verified live in a real
+browser. Driver frontend (Phase 8) not started yet.**
 
 ## Problem Statement
 
@@ -24,9 +23,9 @@ statuses bleed into each other is the actual engineering problem this MVP solves
 ## Features Implemented
 
 > Filled in phase by phase per `MASTER_PLAN.md` Section 8; kept accurate in `docs/PROGRESS.md`.
-> **Backend only so far — no frontend UI exists yet, so nothing below is usable outside of direct
-> API calls.** Items below have been verified end-to-end against a real MySQL/MariaDB instance
-> (see `docs/PROGRESS.md`), not just mocked tests.
+> The passenger flow now has a real UI (verified live in a browser); the driver flow is still
+> backend-only (API calls) until Phase 8. Items below have been verified end-to-end against a real
+> MySQL/MariaDB instance (see `docs/PROGRESS.md`), not just mocked tests.
 
 **Passenger**
 - [x] Signup / login (`POST /api/auth/signup`, `POST /api/auth/login`)
@@ -57,7 +56,9 @@ statuses bleed into each other is the actual engineering problem this MVP solves
 
 ## Screenshots / GIFs
 
-Not yet available — frontend is not built (Phases 7–8).
+Not yet captured as static images — the passenger flow (signup/login, request a ride, track
+status, cancel, ride history) has been verified live in a browser (`docs/PROGRESS.md` Phase 7);
+screenshots/GIFs will be added during the documentation pass before submission (Phase 10).
 
 ## Architecture
 
@@ -109,21 +110,29 @@ components; SSR-authenticated pages are not implemented or claimed.
 
 ```
 backend/
+  prisma/          schema, migrations, seed
   src/
-    routes/
-    controllers/
-    services/
-    prisma/
+    routes/        thin Express routers
+    controllers/    req/res only, no business logic
+    services/       business logic (matching, fare, lifecycle, cancellation)
+    lib/            prisma client, jwt, fare math, state machine, errors
+    validators/      Zod schemas
+    data/           zones + distance table
+  tests/           unit (mocked Prisma) + tests/integration (real DB)
 frontend/
-  app/
+  app/              Next.js App Router pages (signup, login, rides/*)
+  components/       NavBar, RequireAuth, StatusBadge
+  lib/              api client, AuthContext, format helpers
 ```
-
-Not yet scaffolded — lands in Phase 1 (`feature/project-scaffold`).
 
 ## Prerequisites
 
-To be finalized in Phase 1/9 (Node version, Docker, Docker Compose versions pinned once the
-scaffold and Docker setup exist).
+- Node.js (tested with v24; anything reasonably current LTS should work — no Node-version-specific
+  features used beyond standard ES2020+)
+- npm
+- A MySQL-compatible database (MySQL 8 or MariaDB — this repo has been verified against MariaDB
+  10.4 via XAMPP, see `docs/decisions.md` item 13)
+- Docker + Docker Compose (optional for now — full container setup lands in Phase 9)
 
 ## Environment Variables
 
@@ -132,21 +141,31 @@ Not yet defined — `.env.example` lands in Phase 1 and is finalized in Phase 9
 
 ## Local Setup (without Docker)
 
-Backend only, for now (frontend has no real pages yet):
+**Backend:**
 
 ```bash
 cd backend
 npm install
-cp .env.example .env   # then point DATABASE_URL at a reachable MySQL 8 instance
+cp .env.example .env   # then point DATABASE_URL at a reachable MySQL 8 (or MariaDB) instance
 npx prisma migrate deploy
 npx prisma db seed
 npm run dev             # http://localhost:4000
 ```
 
+**Frontend** (passenger flow only — driver UI is Phase 8):
+
+```bash
+cd frontend
+npm install
+cp .env.example .env.local   # NEXT_PUBLIC_API_URL, defaults to http://localhost:4000
+npm run dev              # http://localhost:3000 (or the next free port)
+```
+
 **Verified end-to-end** against a real local MySQL/MariaDB (XAMPP) instance — migration applied,
-seed data confirmed, auth/Tesla/ride-request endpoints exercised live. See `docs/PROGRESS.md`
-Phase 2/3 for the full verification log, and `docs/decisions.md` item 13 for a note that the
-verified local instance is MariaDB, not MySQL proper.
+seed data confirmed, auth/Tesla/ride-request/pooling/lifecycle endpoints exercised live, and the
+passenger frontend exercised in a real browser against the real running backend. See
+`docs/PROGRESS.md` for the full verification log per phase, and `docs/decisions.md` item 13 for a
+note that the verified local instance is MariaDB, not MySQL proper.
 
 ## Docker Setup
 
