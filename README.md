@@ -5,8 +5,8 @@
 A ride-pooling MVP built for the RoBenDevs Software Engineer assessment. Passengers request rides
 between predefined Dhaka zones; compatible requests are pooled into a single Tesla trip so riders
 share a car (and split part of the cost) while still tracking their own fare and status
-individually. **Current state: Phase 0 (architecture & design documentation) complete. No
-application code exists yet.**
+individually. **Current state: Phase 2 in progress (backend auth + Tesla registration). Frontend
+not started yet.**
 
 ## Problem Statement
 
@@ -21,19 +21,21 @@ statuses bleed into each other is the actual engineering problem this MVP solves
 
 ## Features Implemented
 
-> Nothing is implemented yet — Phase 0 is documentation only. This checklist will be filled in
-> phase by phase per `MASTER_PLAN.md` Section 8, and kept accurate in `docs/PROGRESS.md`.
+> Filled in phase by phase per `MASTER_PLAN.md` Section 8; kept accurate in `docs/PROGRESS.md`.
+> **Backend only so far — no frontend UI exists yet, so nothing below is usable outside of direct
+> API calls, and the DB-backed items have not been verified against a live MySQL (see
+> `docs/PROGRESS.md` Phase 2 "Known issues").**
 
 **Passenger**
-- [ ] Signup / login
+- [x] Signup / login (`POST /api/auth/signup`, `POST /api/auth/login`)
 - [ ] Request a ride (pickup, destination, seats) with immediate estimated fare
 - [ ] Track ride status
 - [ ] Ride history
 - [ ] Cancel a ride (from `REQUESTED`/`MATCHED` only)
 
 **Driver**
-- [ ] Signup / login, register Tesla
-- [ ] Online / offline toggle
+- [x] Signup / login, register Tesla (`POST /api/teslas`, driver-only, rejects a second Tesla)
+- [x] Online / offline toggle (`PATCH /api/teslas/:id/status`)
 - [ ] View pending pools/requests
 - [ ] Accept a pool
 - [ ] Advance pool through `DRIVER_ARRIVED` / `STARTED` / `COMPLETED`
@@ -121,22 +123,49 @@ Not yet defined — `.env.example` lands in Phase 1 and is finalized in Phase 9
 
 ## Local Setup (without Docker)
 
-Not yet available — depends on Phase 1 scaffold.
+Backend only, for now (frontend has no real pages yet):
+
+```bash
+cd backend
+npm install
+cp .env.example .env   # then point DATABASE_URL at a reachable MySQL 8 instance
+npx prisma migrate deploy
+npx prisma db seed
+npm run dev             # http://localhost:4000
+```
+
+**Not yet verified against a live database** — the migration and seed were written and the SQL
+was generated/validated statically, but this sandbox has no MySQL/Docker available to actually run
+them end-to-end. See `docs/decisions.md` item 11 and `docs/PROGRESS.md` Phase 2 "Known issues".
 
 ## Docker Setup
 
-Not yet available — lands in Phase 9 (`feature/docker-deploy`). Target: `docker compose up` brings
-up backend, frontend, and MySQL with migrations and seed data applied automatically.
+Not yet available — lands in Phase 9 (`feature/docker-deploy`). A backend + MySQL
+`docker-compose.yml` skeleton exists (Phase 1) but has no automatic migration/seed step yet.
 
 ## Running Tests
 
-Not yet available. Required coverage is tracked in `MASTER_PLAN.md` Section 9 and will be linked
-here once tests exist.
+```bash
+cd backend
+npm test
+```
+
+16 tests currently pass (`health`, `auth`, `tesla` suites) — all against a **mocked** Prisma
+client (no live DB required), so they cover validation, hashing, JWT issuance, role/ownership
+guards, and HTTP status mapping, but not actual SQL execution or DB constraints. Required coverage
+overall is tracked in `MASTER_PLAN.md` Section 9.
 
 ## Demo Credentials
 
-Not yet available — seed script (Jashim as driver, Nusrat/Rafiq/Shirin as passengers, Bullet as
-the Tesla) lands in Phase 2.
+Seeded by `backend/prisma/seed.js` (not yet run against a live DB — see Local Setup above). All
+accounts use the password `password123`.
+
+| Role | Name | Email |
+|---|---|---|
+| Driver (owns Bullet, capacity 3) | Jashim | `jashim@dhakateslapool.test` |
+| Passenger | Nusrat | `nusrat@dhakateslapool.test` |
+| Passenger | Rafiq | `rafiq@dhakateslapool.test` |
+| Passenger | Shirin | `shirin@dhakateslapool.test` |
 
 ## Fare Model
 
@@ -169,7 +198,23 @@ Not yet deployed — Phase 10/11.
 
 ## API Overview
 
-Full contract in `MASTER_PLAN.md` Section 7. Not yet implemented.
+Full contract in `MASTER_PLAN.md` Section 7. Implemented so far:
+
+| Method | Path | Role | Status |
+|---|---|---|---|
+| POST | `/api/auth/signup` | public | ✅ implemented |
+| POST | `/api/auth/login` | public | ✅ implemented |
+| POST | `/api/teslas` | driver | ✅ implemented (rejects a 2nd Tesla per driver) |
+| PATCH | `/api/teslas/:id/status` | driver (own) | ✅ implemented |
+| POST | `/api/rides` | passenger | ⬜ Phase 3 |
+| GET | `/api/rides/:id` | passenger (own) | ⬜ Phase 3 |
+| GET | `/api/rides` | passenger | ⬜ Phase 3 |
+| POST | `/api/rides/:id/cancel` | passenger (own) | ⬜ Phase 6 |
+| GET | `/api/driver/requests` | driver | ⬜ Phase 4 |
+| POST | `/api/driver/pools/:poolId/accept` | driver (own) | ⬜ Phase 4 |
+| PATCH | `/api/driver/pools/:poolId/status` | driver (own) | ⬜ Phase 6 |
+| GET | `/api/driver/pools/:id` | driver (own) | ⬜ Phase 6 |
+| GET | `/api/driver/history` | driver | ⬜ Phase 6 |
 
 ## Key Decisions & Trade-offs
 

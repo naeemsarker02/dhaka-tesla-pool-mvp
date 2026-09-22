@@ -1,6 +1,6 @@
 // Prisma schema — MySQL provider, per MASTER_PLAN.md Section 1.
-// Phase 1 scope: datasource + generator only. Models are added starting Phase 2
-// (users, teslas) per MASTER_PLAN.md Section 8 — do not add models here yet.
+// Built incrementally, phase by phase, per MASTER_PLAN.md Section 8 — do not add models for a
+// later phase ahead of time (e.g. no ride_requests/pools/pool_memberships until Phases 3-4).
 
 generator client {
   provider = "prisma-client-js"
@@ -9,4 +9,48 @@ generator client {
 datasource db {
   provider = "mysql"
   url      = env("DATABASE_URL")
+}
+
+enum Role {
+  PASSENGER
+  DRIVER
+
+  @@map("role")
+}
+
+enum TeslaStatus {
+  ONLINE
+  OFFLINE
+
+  @@map("tesla_status")
+}
+
+model User {
+  id           String   @id @default(uuid())
+  name         String
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  role         Role
+  phone        String
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  tesla Tesla?
+
+  @@map("users")
+}
+
+// teslas.driver_id is UNIQUE — one Tesla per driver (MVP assumption, docs/decisions.md item 3).
+// teslas.capacity > 0 is enforced via a CHECK constraint added by hand to the migration SQL,
+// since Prisma's schema language has no native @check attribute (docs/decisions.md item 10).
+model Tesla {
+  id        String      @id @default(uuid())
+  driverId  String      @unique @map("driver_id")
+  name      String
+  capacity  Int
+  status    TeslaStatus @default(OFFLINE)
+  createdAt DateTime    @default(now()) @map("created_at")
+
+  driver User @relation(fields: [driverId], references: [id])
+
+  @@map("teslas")
 }

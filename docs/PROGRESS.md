@@ -128,9 +128,85 @@ architectural decisions changed in this phase, only scaffolding.
 - `npx prisma generate` currently errors ("no models defined") since `schema.prisma` intentionally
   has no models yet — expected at this phase, not a bug; resolves once Phase 2 adds `User`/`Tesla`
   models.
-- Branch `feature/project-scaffold` created but **not yet merged** into `master` — holding for
-  review/confirmation before the `--no-ff` merge, per the git-change caution used throughout this
-  session.
+- ~~Branch `feature/project-scaffold` created but not yet merged into `master`~~ — merged
+  `--no-ff` (`e7258dc`) and pushed after user confirmation.
 
-**Next task:** Phase 2 — `feature/passenger-auth` + `feature/driver-tesla-setup` (users/teslas
-Prisma models, signup/login, JWT middleware, seed script for the story cast).
+**Next task:** Phase 2 — see below.
+
+---
+
+## Phase 2 — `feature/passenger-auth` + `feature/driver-tesla-setup`
+
+**Status:** Complete on branch `feature/passenger-auth` (not yet merged — pending review).
+Combined both master-plan branch names into one feature branch since they're one phase's worth of
+tightly related schema/auth work; split into two merges was not warranted for this scope.
+
+**What was implemented:**
+- **Prisma models:** `User` (`users` table — id, name, email UK, password_hash, role enum,
+  phone, created_at) and `Tesla` (`teslas` table — id, driver_id UK+FK, name, capacity, status
+  enum, created_at), per `docs/erd.md`. `RideRequest`/`Pool`/`PoolMembership`/etc. intentionally
+  not added yet (Phases 3–4).
+- **Migration:** `backend/prisma/migrations/20260922000000_init/migration.sql`, generated via
+  `prisma migrate diff --from-empty --to-schema-datamodel` (schema-to-schema SQL diff, which works
+  without a live DB connection) plus a hand-added `CHECK (capacity > 0)` constraint (Prisma's
+  schema language has no native `@check` attribute — `docs/decisions.md` item 10). **Not yet
+  applied to a real database** — see Known issues below.
+- **Auth:** `POST /api/auth/signup`, `POST /api/auth/login` (`src/routes/auth.js` →
+  `src/controllers/authController.js` → `src/services/authService.js`). Passwords hashed with
+  `bcrypt`; JWT payload is `{ sub, role }` only, signed via `src/lib/jwt.js`.
+- **JWT middleware:** `src/middleware/auth.js` — `requireAuth` (401 on missing/invalid token),
+  `requireRole(role)` (403 on wrong role). Ownership checks (driver owns *this* Tesla) done in the
+  service layer, not the middleware, per `MASTER_PLAN.md` §7.1.
+- **Tesla endpoints:** `POST /api/teslas` (driver-only, rejects a second Tesla for a driver who
+  already owns one — checked at both app level and DB `UNIQUE` constraint, via
+  `src/services/teslaService.js`), `PATCH /api/teslas/:id/status` (driver-owns-Tesla check, online/
+  offline toggle).
+- **Validation:** Zod schemas for both auth endpoints and both Tesla endpoints
+  (`src/validators/`), applied via a reusable `validateBody` middleware.
+- **Error handling:** `src/lib/errors.js` (typed `AppError` subclasses) + a centralized
+  `src/middleware/errorHandler.js`, so services throw typed errors instead of building HTTP
+  responses inline.
+- **Seed script:** `backend/prisma/seed.js` — Jashim (driver) + Bullet (Tesla, capacity 3,
+  `ONLINE`) + Nusrat/Rafiq/Shirin (passengers), all with password `password123`, upsert-based (safe
+  to re-run). Wired into `package.json`'s `prisma.seed` config.
+
+**Files changed:** `backend/prisma/schema.prisma`, `backend/prisma/migrations/**`,
+`backend/prisma/seed.js`, `backend/src/lib/{prisma,jwt,errors}.js`,
+`backend/src/middleware/{auth,validate,errorHandler}.js`, `backend/src/validators/{auth,tesla}.js`,
+`backend/src/services/{authService,teslaService}.js`,
+`backend/src/controllers/{authController,teslaController}.js`,
+`backend/src/routes/{auth,teslas}.js`, `backend/src/app.js` (routes + error handler wired in),
+`backend/package.json` (added `prisma.seed` config).
+
+**Tests added:** `backend/tests/auth.test.js` (9 cases: signup validation, invalid role, signup
+success incl. email normalization + password_hash never returned, duplicate-email 409, login
+success, wrong password 401, nonexistent user 401) and `backend/tests/tesla.test.js` (7 cases: no
+token 401, invalid token 401, wrong-role 403, Tesla registration success, second-Tesla-for-same-
+driver 409, invalid capacity 400, cross-driver status-toggle 403, owning-driver toggle success).
+
+**Tests passed/failed:** `npx jest --runInBand` → **16/16 passed** (health + auth + tesla suites).
+All backend source files pass `node --check` syntax validation. `prisma validate`/`prisma generate`
+succeed against the installed CLI (5.22.0) with `DATABASE_URL` set.
+
+**Documentation updated:** This file; `docs/decisions.md` items 10–11 (below).
+
+**Known issues / unresolved — read before assuming this is DB-verified:**
+- **No MySQL or Docker is available in this sandbox** (`docker`/`mysql` commands not found, no
+  local MySQL service). This means:
+  - The migration SQL was generated statically (`prisma migrate diff --from-empty`, which does not
+    require a live connection) and has **never been applied** to a real MySQL instance in this
+    session. It has not been run through `prisma migrate dev`/`migrate deploy` against a live DB.
+  - All tests use a **mocked Prisma client** (`jest.mock("../src/lib/prisma")`) — they verify
+    validation, auth/role middleware, hashing, JWT issuance, ownership logic, and HTTP status
+    mapping, but **not** actual SQL execution, the `UNIQUE`/`CHECK` constraints, or FK behavior.
+  - **Action needed from the project owner:** run `docker compose up -d mysql` (or point
+    `DATABASE_URL` at any reachable MySQL 8), then `npx prisma migrate deploy && npx prisma db seed`
+    inside `backend/`, and re-run `npm test` with a real DB to confirm the migration actually
+    applies cleanly and the app talks to it correctly. This is flagged rather than silently
+    claimed as verified.
+- `bcrypt`/`next` dependency advisories from Phase 1 (`docs/decisions.md` items 8–9) still stand,
+  unchanged.
+- Branch `feature/passenger-auth` not yet merged into `master` — holding for review.
+
+**Next task:** Phase 3 — `feature/ride-request` (zones table + seed, `ride_requests` table,
+`POST /api/rides` with `estimated_fare_paisa`).

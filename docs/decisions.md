@@ -96,3 +96,35 @@ native bindings (not a runtime dependency of the running server).
 pure-JS `bcryptjs` to sidestep the advisory — that would be a library swap without approval for a
 build-time-only exposure. Logged here as a known issue; revisit only if it becomes a real blocker
 (e.g. a CI security gate) rather than silently changing the dependency.
+
+### 10. `capacity > 0` CHECK constraint added by hand to the migration SQL (2026-09-22)
+
+**Context:** Phase 2. `MASTER_PLAN.md` §3 requires `teslas.capacity` to have a `CHECK (capacity >
+0)` constraint (MySQL 8.0.16+). Prisma's schema language (as of the installed 5.22.0) has no
+native `@check`/`@@check` attribute, so it cannot be expressed in `schema.prisma` and generated
+automatically.
+
+**Decision:** generated the rest of the migration via `prisma migrate diff --from-empty
+--to-schema-datamodel=prisma/schema.prisma --script`, then hand-appended the `ALTER TABLE teslas
+ADD CONSTRAINT teslas_capacity_positive CHECK (capacity > 0);` statement to the resulting
+`migration.sql`. This is a one-time addition to a generated file, not an ongoing manual process —
+future schema changes still go through `prisma migrate dev`/`diff` normally; only this specific
+constraint needs manual SQL since Prisma can't express it declaratively. Per `MASTER_PLAN.md` §3,
+this is a second line of defense only — app-level capacity enforcement (the row-locked transaction
+in §6) is what's actually relied on and graded.
+
+### 11. Migration generated and validated without a live MySQL connection (2026-09-22)
+
+**Context:** Phase 2. This sandbox has no `docker`/`mysql` available (checked and confirmed — see
+`docs/PROGRESS.md` Phase 2 entry) and no other network-reachable MySQL instance was configured, so
+`prisma migrate dev` (which requires a live connection + shadow database) could not be run.
+
+**Decision:** used `prisma migrate diff --from-empty --to-schema-datamodel=<schema>` instead, which
+computes the same CREATE TABLE/foreign-key SQL by diffing schema states rather than introspecting a
+live database, and does not require connectivity. The resulting SQL was hand-verified against the
+schema and is included as `backend/prisma/migrations/20260922000000_init/migration.sql` in
+Prisma's standard migration-folder format, so `prisma migrate deploy` should apply it normally once
+a real MySQL instance is available. **This has not been confirmed by actually running the
+migration against a live database** — that verification is left for the project owner (or a later
+session with DB access) before treating Phase 2 as fully done per `CLAUDE.md`'s "Code Quality"
+checklist item 3 ("verify database migrations apply cleanly from scratch").
