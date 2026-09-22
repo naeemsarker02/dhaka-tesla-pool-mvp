@@ -5,8 +5,9 @@
 A ride-pooling MVP built for the RoBenDevs Software Engineer assessment. Passengers request rides
 between predefined Dhaka zones; compatible requests are pooled into a single Tesla trip so riders
 share a car (and split part of the cost) while still tracking their own fare and status
-individually. **Current state: Phase 2 in progress (backend auth + Tesla registration). Frontend
-not started yet.**
+individually. **Current state: Phase 3 in progress (backend auth, Tesla registration, ride
+requests + fare estimation, all verified against a real MySQL/MariaDB instance). Pooling/matching
+and the frontend are not started yet.**
 
 ## Problem Statement
 
@@ -23,14 +24,15 @@ statuses bleed into each other is the actual engineering problem this MVP solves
 
 > Filled in phase by phase per `MASTER_PLAN.md` Section 8; kept accurate in `docs/PROGRESS.md`.
 > **Backend only so far — no frontend UI exists yet, so nothing below is usable outside of direct
-> API calls, and the DB-backed items have not been verified against a live MySQL (see
-> `docs/PROGRESS.md` Phase 2 "Known issues").**
+> API calls.** Items below have been verified end-to-end against a real MySQL/MariaDB instance
+> (see `docs/PROGRESS.md`), not just mocked tests.
 
 **Passenger**
 - [x] Signup / login (`POST /api/auth/signup`, `POST /api/auth/login`)
-- [ ] Request a ride (pickup, destination, seats) with immediate estimated fare
-- [ ] Track ride status
-- [ ] Ride history
+- [x] Request a ride (`POST /api/rides`) — pickup/destination/seats, immediate
+  `estimated_fare_paisa` (no pool discount yet — that's Phase 4)
+- [x] Track ride status (`GET /api/rides/:id`)
+- [x] Ride history (`GET /api/rides`)
 - [ ] Cancel a ride (from `REQUESTED`/`MATCHED` only)
 
 **Driver**
@@ -134,9 +136,10 @@ npx prisma db seed
 npm run dev             # http://localhost:4000
 ```
 
-**Not yet verified against a live database** — the migration and seed were written and the SQL
-was generated/validated statically, but this sandbox has no MySQL/Docker available to actually run
-them end-to-end. See `docs/decisions.md` item 11 and `docs/PROGRESS.md` Phase 2 "Known issues".
+**Verified end-to-end** against a real local MySQL/MariaDB (XAMPP) instance — migration applied,
+seed data confirmed, auth/Tesla/ride-request endpoints exercised live. See `docs/PROGRESS.md`
+Phase 2/3 for the full verification log, and `docs/decisions.md` item 13 for a note that the
+verified local instance is MariaDB, not MySQL proper.
 
 ## Docker Setup
 
@@ -150,14 +153,16 @@ cd backend
 npm test
 ```
 
-16 tests currently pass (`health`, `auth`, `tesla` suites) — all against a **mocked** Prisma
-client (no live DB required), so they cover validation, hashing, JWT issuance, role/ownership
-guards, and HTTP status mapping, but not actual SQL execution or DB constraints. Required coverage
+31 tests currently pass (`health`, `auth`, `tesla`, `fare`, `ride` suites) — the fare suite asserts
+exact integer-paisa values against the master plan's worked example (no floating-point
+comparisons); the rest use a **mocked** Prisma client (no live DB required) covering validation,
+hashing, JWT issuance, role/ownership guards, and HTTP status mapping. Endpoint behavior has
+separately been verified live against a real database (see Local Setup above). Required coverage
 overall is tracked in `MASTER_PLAN.md` Section 9.
 
 ## Demo Credentials
 
-Seeded by `backend/prisma/seed.js` (not yet run against a live DB — see Local Setup above). All
+Seeded by `backend/prisma/seed.js`, confirmed against a real database (see Local Setup above). All
 accounts use the password `password123`.
 
 | Role | Name | Email |
@@ -206,9 +211,10 @@ Full contract in `MASTER_PLAN.md` Section 7. Implemented so far:
 | POST | `/api/auth/login` | public | ✅ implemented |
 | POST | `/api/teslas` | driver | ✅ implemented (rejects a 2nd Tesla per driver) |
 | PATCH | `/api/teslas/:id/status` | driver (own) | ✅ implemented |
-| POST | `/api/rides` | passenger | ⬜ Phase 3 |
-| GET | `/api/rides/:id` | passenger (own) | ⬜ Phase 3 |
-| GET | `/api/rides` | passenger | ⬜ Phase 3 |
+| POST | `/api/rides` | passenger | ✅ implemented |
+| GET | `/api/rides/:id` | passenger (own) | ✅ implemented |
+| GET | `/api/rides` | passenger | ✅ implemented |
+| GET | `/api/zones` | public | ✅ implemented (not in master plan's table — added for pickup/destination dropdowns, `docs/decisions.md` item 14) |
 | POST | `/api/rides/:id/cancel` | passenger (own) | ⬜ Phase 6 |
 | GET | `/api/driver/requests` | driver | ⬜ Phase 4 |
 | POST | `/api/driver/pools/:poolId/accept` | driver (own) | ⬜ Phase 4 |

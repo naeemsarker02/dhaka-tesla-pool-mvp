@@ -190,23 +190,113 @@ succeed against the installed CLI (5.22.0) with `DATABASE_URL` set.
 
 **Documentation updated:** This file; `docs/decisions.md` items 10–11 (below).
 
-**Known issues / unresolved — read before assuming this is DB-verified:**
-- **No MySQL or Docker is available in this sandbox** (`docker`/`mysql` commands not found, no
-  local MySQL service). This means:
-  - The migration SQL was generated statically (`prisma migrate diff --from-empty`, which does not
-    require a live connection) and has **never been applied** to a real MySQL instance in this
-    session. It has not been run through `prisma migrate dev`/`migrate deploy` against a live DB.
-  - All tests use a **mocked Prisma client** (`jest.mock("../src/lib/prisma")`) — they verify
-    validation, auth/role middleware, hashing, JWT issuance, ownership logic, and HTTP status
-    mapping, but **not** actual SQL execution, the `UNIQUE`/`CHECK` constraints, or FK behavior.
-  - **Action needed from the project owner:** run `docker compose up -d mysql` (or point
-    `DATABASE_URL` at any reachable MySQL 8), then `npx prisma migrate deploy && npx prisma db seed`
-    inside `backend/`, and re-run `npm test` with a real DB to confirm the migration actually
-    applies cleanly and the app talks to it correctly. This is flagged rather than silently
-    claimed as verified.
+**Known issues / unresolved (at time of writing — see DB verification update below):**
+- At the time this phase was built, no MySQL/Docker was available in-session, so the migration was
+  generated statically and only mocked-Prisma tests had been run.
 - `bcrypt`/`next` dependency advisories from Phase 1 (`docs/decisions.md` items 8–9) still stand,
   unchanged.
-- Branch `feature/passenger-auth` not yet merged into `master` — holding for review.
 
-**Next task:** Phase 3 — `feature/ride-request` (zones table + seed, `ride_requests` table,
-`POST /api/rides` with `estimated_fare_paisa`).
+**~~Merged into `master`~~** — merged `--no-ff` (`c864d99`) and pushed, after the DB verification
+below.
+
+---
+
+## Phase 2 — Real-database verification (2026-09-22, project owner's local XAMPP MySQL/MariaDB)
+
+**Status:** Complete. All of Phase 2's "known issues" above are now resolved/confirmed.
+
+- Created `backend/.env` (gitignored, confirmed via `git check-ignore`) pointing at
+  `mysql://root:@localhost:3306/dhaka_tesla_pool` (XAMPP default: root, empty password,
+  `localhost:3306`).
+- `npx prisma migrate deploy` — applied cleanly. Verified via `information_schema` that
+  `teslas.driver_id` is `UNIQUE` and the hand-added `CHECK (capacity > 0)` constraint is present.
+- `npx prisma db seed` — succeeded. Verified directly against the DB: Jashim (DRIVER), Nusrat/
+  Rafiq/Shirin (PASSENGER) all present with correct emails/roles/phones; Bullet (capacity 3,
+  `ONLINE`) correctly tied to Jashim via `driverId`.
+- `npm test` — 16/16 passed (unchanged; these are mocked-Prisma unit tests, unaffected by DB
+  availability, run again here for completeness).
+- No lint/typecheck configured (no ESLint config, no TypeScript) — confirmed, nothing to run.
+- **Live functional verification** (real server process, real DB, not mocked): login success/
+  wrong-password/duplicate-signup, Tesla registration + duplicate-Tesla 409, wrong-role 403,
+  no-token 401, cross-driver ownership 403, owning-driver status toggle 200 — all exercised via
+  real HTTP requests against `node src/server.js`, all behaved correctly. Server process cleanly
+  stopped afterward (port 4000 confirmed free); Bullet's status was toggled and restored to
+  `ONLINE` to leave seed data as expected.
+- **One discovery, not a problem:** the local dev DB is **MariaDB 10.4.32**, not MySQL —
+  `docs/decisions.md` item 13. Everything tested is compatible; noted so it isn't silently assumed
+  equivalent to "verified on MySQL 8" for later hosting decisions.
+
+**Next task:** Phase 3 — see below.
+
+---
+
+## Phase 3 — `feature/ride-request`
+
+**Status:** Complete on branch `feature/ride-request` (not yet merged — pending review). Verified
+against the same live MariaDB instance (migration applied with `prisma migrate dev` this time,
+since a live DB was available — no more static-diff workaround).
+
+**What was implemented:**
+- **Prisma models:** `Zone` (`zones` table — id, name UK, cluster) and `RideRequest`
+  (`ride_requests` table — passenger_id/pickup_zone_id/destination_zone_id FKs, seats_requested,
+  status enum, estimated_fare_paisa, fare_paisa nullable, full lifecycle timestamp columns). No
+  `pool_id` column, per `docs/erd.md`. `Pool`/`PoolMembership` intentionally not added yet
+  (Phase 4).
+- **Migration:** `backend/prisma/migrations/20260922174914_add_zones_and_ride_requests/` —
+  generated with a real `prisma migrate dev --create-only` against the live DB this time (Phase 2
+  had to use the static-diff workaround; not needed once DB access existed). Applied via
+  `prisma migrate dev`. Verified `SHOW INDEX` confirms FK indexes exist on all three FK columns
+  (`passenger_id`, `pickup_zone_id`, `destination_zone_id`) — InnoDB auto-creates these with the
+  FK constraint.
+- **Zone/distance data:** `backend/src/data/zones.js` — single source of truth (seed script +
+  services both import it) for the 8 zones, their clusters, and all 28 pairwise distances. Only 1
+  cluster and 2 distances were specified in the master plan; the rest is a documented MVP
+  assumption (`docs/decisions.md` item 12).
+- **Fare calculation:** `backend/src/lib/fare.js` — integer-paisa-only arithmetic
+  (`calculateEstimatedFarePaisa`, `calculatePooledFarePaisa`, `calculatePoolDiscountPaisa`),
+  matching `docs/fare-model.md` exactly.
+- **`POST /api/rides`** (passenger-only): validates both zone ids exist and differ, computes
+  `estimated_fare_paisa` (no discount), creates the ride request with `status = REQUESTED`,
+  `fare_paisa = null`. Also added `GET /api/rides` (own history) and `GET /api/rides/:id`
+  (ownership-checked) — companion reads for the same resource, not a later-phase feature.
+- **`GET /api/zones`** (public): added beyond the master plan's endpoint table, since the frontend
+  needs it for pickup/destination dropdowns (Phase 7) and it's a zero-logic reference-data read —
+  flagged and justified in `docs/decisions.md` item 14 rather than silently added.
+- **Seed script:** updated to seed all 8 zones from `src/data/zones.js` (upsert-based).
+
+**Files changed:** `backend/prisma/schema.prisma`, `backend/prisma/migrations/**`,
+`backend/prisma/seed.js`, `backend/src/data/zones.js`, `backend/src/lib/fare.js`,
+`backend/src/validators/ride.js`, `backend/src/services/rideService.js`,
+`backend/src/controllers/{rideController,zoneController}.js`,
+`backend/src/routes/{rides,zones}.js`, `backend/src/app.js` (routes wired in).
+
+**Tests added:** `backend/tests/fare.test.js` (7 cases — exact-integer assertions against the
+Section 5.2 worked example: pool discount = 450 paisa exactly, Nusrat's pooled fare = 7050 paisa
+exactly, Rafiq's = 8550 paisa exactly, no floating-point comparisons anywhere) and
+`backend/tests/ride.test.js` (9 cases: auth/role guards, missing-field validation, identical-zone
+rejection, unknown-zone rejection, successful creation with correct `estimated_fare_paisa` and
+`status`, cross-passenger `GET /api/rides/:id` ownership).
+
+**Tests passed/failed:** `npx jest --runInBand` → **31/31 passed** (health + auth + tesla + fare +
+ride suites). All new source files pass `node --check`.
+
+**Real-database verification (same live MariaDB instance as Phase 2):**
+- `prisma migrate dev` applied the new tables/FKs/indexes cleanly.
+- `prisma db seed` populated all 8 zones with correct clusters — verified via `GET /api/zones`
+  against a running server.
+- Created a real ride request via `POST /api/rides` (Nusrat, Banani → Mohakhali) against the live
+  DB: response showed `estimatedFarePaisa: 7500` (= `3000 + 3*1500`, exactly matching the 3km
+  distance from the master plan's own worked example), `status: "REQUESTED"`, `farePaisa: null`.
+- Verified live: identical pickup/destination → 400; unknown zone id → 400; driver-role token →
+  403; `GET /api/rides` returns the passenger's own history; `GET /api/rides/:id` for another
+  passenger's ride → 403.
+- Cleaned up the test ride request afterward (`rideRequest.deleteMany({})`) so seed data stays
+  exactly as documented; server process stopped cleanly (port 4000 confirmed free).
+
+**Documentation updated:** This file; `docs/decisions.md` items 12–14.
+
+**Known issues / unresolved:** none blocking. Branch not yet merged into `master`, per the
+review-before-merge pattern used throughout this session.
+
+**Next task:** Phase 4 — `feature/tesla-pooling` (`pools`/`pool_memberships` tables, matching
+service, `GET /api/driver/requests`, `POST /api/driver/pools/:poolId/accept`).

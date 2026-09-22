@@ -124,7 +124,52 @@ computes the same CREATE TABLE/foreign-key SQL by diffing schema states rather t
 live database, and does not require connectivity. The resulting SQL was hand-verified against the
 schema and is included as `backend/prisma/migrations/20260922000000_init/migration.sql` in
 Prisma's standard migration-folder format, so `prisma migrate deploy` should apply it normally once
-a real MySQL instance is available. **This has not been confirmed by actually running the
-migration against a live database** — that verification is left for the project owner (or a later
-session with DB access) before treating Phase 2 as fully done per `CLAUDE.md`'s "Code Quality"
-checklist item 3 ("verify database migrations apply cleanly from scratch").
+a real MySQL instance is available.
+
+**Update (2026-09-22, same day):** confirmed. The project owner brought up a local XAMPP MySQL
+instance; `prisma migrate deploy` applied this migration cleanly, `prisma db seed` populated it
+correctly (verified: Jashim/Bullet/Nusrat/Rafiq/Shirin all present with correct roles/ownership),
+and live HTTP requests against the running server (login, Tesla registration/ownership/uniqueness,
+role/auth guards) all behaved as expected. See `docs/PROGRESS.md` Phase 2 for the full verification
+log. From Phase 3 onward, migrations are generated with a live `prisma migrate dev` (this XAMPP
+instance) rather than the static `migrate diff` workaround.
+
+### 12. Zone clusters (beyond the one given example) and the full zone-distance table (2026-09-22)
+
+**Context:** Phase 3. `MASTER_PLAN.md` §4 gives only one cluster explicitly
+("Gulshan-Mohakhali corridor": Banani, Gulshan, Mohakhali) and only two distances (Banani-Mohakhali
+= 3km, Banani-Gulshan = 4km, from the §5.2 worked example). The other 5 zones (Dhanmondi, Mirpur,
+Uttara, Farmgate, Bashundhara) have no assigned cluster, and only 2 of the 28 possible zone-pair
+distances are specified.
+
+**Decision:** grouped the remaining zones into two more plausible clusters —
+"Dhanmondi-Mirpur-Farmgate corridor" and "Uttara-Bashundhara corridor" — and filled in the
+remaining 26 distances as flat, made-up (not real-geo) whole-km integers, all in
+`backend/src/data/zones.js`, which is the single source of truth for both the seed script and the
+fare/matching services (Phase 4) so the two can never drift apart. The two given values (3km,
+4km) are preserved exactly. This is the same category of assumption as item 5 (flat cluster
+grouping, no real geo) — just filling in the specific numbers item 5 left open.
+
+### 13. Local dev database is MariaDB, not MySQL (2026-09-22)
+
+**Context:** Phase 2/3 verification. The project owner's local XAMPP install runs **MariaDB
+10.4.32**, not MySQL. `MASTER_PLAN.md` §1 specifies MySQL (InnoDB) specifically.
+
+**Decision:** proceeded without substituting anything — MariaDB 10.4 supports everything used so
+far (InnoDB, `CHECK` constraints confirmed present via `information_schema`, UUID-as-VARCHAR
+primary keys, the exact Prisma queries used). Not treated as equivalent to "verified on MySQL 8"
+though — noted here so it isn't silently assumed. If deploying to a real MySQL host later (per
+§1's hosting row — PlanetScale/Railway/Aiven), a smoke test there is still worth doing rather than
+assuming local MariaDB behavior generalizes perfectly.
+
+### 14. Added `GET /api/zones` (public), not in the master plan's Section 7 table (2026-09-22)
+
+**Context:** Phase 3. `MASTER_PLAN.md` §7's endpoint contract table has no zones-listing endpoint,
+but the frontend (Phase 7, per the plan's own Phase 7 checklist: "pickup, destination dropdowns
+from zones") needs some way to fetch the zone list, and tests/manual verification need it too.
+
+**Decision:** added `GET /api/zones` (public, no auth — zones are non-sensitive reference data,
+not a user-owned resource) directly in a thin controller with no service layer, since it's a
+zero-logic passthrough read, unlike every other endpoint in this codebase. A small, clearly-scoped
+addition rather than a scope change — flagged here per `CLAUDE.md`'s instruction not to silently
+invent requirements, even minor ones.
