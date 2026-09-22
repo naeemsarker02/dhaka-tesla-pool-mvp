@@ -295,8 +295,75 @@ ride suites). All new source files pass `node --check`.
 
 **Documentation updated:** This file; `docs/decisions.md` items 12–14.
 
-**Known issues / unresolved:** none blocking. Branch not yet merged into `master`, per the
-review-before-merge pattern used throughout this session.
+**Known issues / unresolved:** none blocking.
 
-**Next task:** Phase 4 — `feature/tesla-pooling` (`pools`/`pool_memberships` tables, matching
-service, `GET /api/driver/requests`, `POST /api/driver/pools/:poolId/accept`).
+**~~Merged into `master`~~** — merged `--no-ff` (`fa5e6be`) and pushed, after the pre-merge check
+in the same conversation.
+
+**Next task:** Phase 4 — see below.
+
+---
+
+## Phase 4 — `feature/tesla-pooling`
+
+**Status:** Complete on branch `feature/tesla-pooling`, verified live against the same MariaDB
+instance with the exact Nusrat/Rafiq scenario from `MASTER_PLAN.md` §5.2. Per the user's
+instruction to proceed continuously through the plan, this phase (and those after it) merge into
+`master` without a separate per-phase confirmation pause, unlike Phases 1–3.
+
+**What was implemented:**
+- **Prisma models:** `Pool` (`pools` — tesla_id FK, status enum, seats_occupied aggregate counter)
+  and `PoolMembership` (`pool_memberships` — pool_id FK, ride_request_id **UNIQUE** FK, seats). No
+  `FULL` status (computed, per `docs/erd.md`). Also added `RideStatusHistory` now rather than
+  deferring to Phase 6 — `docs/decisions.md` item 15.
+- **Matching service** (`src/services/matchingService.js`): given a new ride request, searches
+  `OPEN` pools for one whose first member shares both pickup and destination cluster and has
+  capacity, joins it if found; otherwise opens a new pool **only on an online Tesla with zero
+  non-terminal pools** (the one-active-pool-per-Tesla invariant, `docs/decisions.md` item 7) or
+  leaves the request unpooled if none qualify. Never touches `ride_request.status` — stays
+  `REQUESTED` either way (Section 3.1). Wired into `rideService.createRideRequest` right after the
+  ride request is created.
+- **`GET /api/driver/requests`** (driver-only): `OPEN` pools belonging to the driver's own Tesla,
+  with full membership detail (passenger's ride request + zones).
+- **`POST /api/driver/pools/:poolId/accept`** (driver-own-Tesla only): ownership check, rejects
+  non-`OPEN` pools (409), then in one transaction: pool `OPEN -> MATCHED`, every member's
+  `ride_request` `REQUESTED -> MATCHED` with `fare_paisa` finalized (Section 5.1 — pooled discount
+  fare for 2+ members, `estimated_fare_paisa` as-is for a solo pool) and one `ride_status_history`
+  row per member.
+
+**Files changed:** `backend/prisma/schema.prisma`, `backend/prisma/migrations/**`,
+`backend/src/services/{matchingService,poolService,rideService}.js`,
+`backend/src/controllers/driverController.js`, `backend/src/routes/driver.js`,
+`backend/src/app.js` (driver routes wired in).
+
+**Tests added:** `backend/tests/pool.test.js` (5 cases — Nusrat+Rafiq join the same pool via two
+sequential `matchRideRequest` calls and neither touches ride-request status; a Mirpur-bound request
+doesn't join an incompatible pool; unpooled when nothing is eligible; capacity-exceeding pool
+rejected) and `backend/tests/poolAccept.test.js` (5 cases — role/ownership/status guards, and the
+exact Section 5.2 fare assertions: Nusrat's pooled fare = 7050 paisa, Rafiq's = 8550 paisa, and a
+solo-pool member keeps `estimated_fare_paisa` unchanged = 12000 paisa). `tests/ride.test.js`'s
+existing Prisma mock was extended with a `$transaction`/`pool`/`tesla` stub so ride-request
+creation tests keep passing now that creation always triggers a matching attempt.
+
+**Tests passed/failed:** `npx jest --runInBand` → **41/41 passed**. All new/changed source files
+pass `node --check`.
+
+**Real-database verification (same live MariaDB instance):** ran the exact worked example live —
+Nusrat requests Banani→Mohakhali, Rafiq requests Banani→Gulshan; both landed in the same `OPEN`
+pool (`seatsOccupied: 2`) while both stayed `REQUESTED`; Jashim's `GET /api/driver/requests` showed
+the pool with both members; `POST /api/driver/pools/:poolId/accept` flipped the pool to `MATCHED`
+and both ride requests to `MATCHED` with **`farePaisa: 7050`** (Nusrat) and **`farePaisa: 8550`**
+(Rafiq) — exact match to §5.2. Separately verified: Shirin's unrelated Dhanmondi→Mirpur request,
+made *after* Bullet's pool was already `MATCHED`, stayed unpooled (no eligible online Tesla with
+zero non-terminal pools) — live confirmation of the one-active-pool-per-Tesla invariant.
+`ride_status_history` confirmed to contain 2 rows (`REQUESTED -> MATCHED`, `changedBy` = Jashim's
+user id). All test data cleared afterward to restore the clean seed state; server process stopped
+cleanly.
+
+**Documentation updated:** This file; `docs/decisions.md` items 15–16.
+
+**Known issues / unresolved:** none blocking. `GET /api/driver/pools/:id` intentionally deferred to
+Phase 6 (`docs/decisions.md` item 16).
+
+**Next task:** Phase 5 — `feature/capacity-enforcement` (row-locked `SELECT ... FOR UPDATE`
+seat-claim transaction, concurrency test for the last-seat race).

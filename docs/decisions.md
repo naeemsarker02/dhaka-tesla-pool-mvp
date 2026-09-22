@@ -173,3 +173,32 @@ not a user-owned resource) directly in a thin controller with no service layer, 
 zero-logic passthrough read, unlike every other endpoint in this codebase. A small, clearly-scoped
 addition rather than a scope change — flagged here per `CLAUDE.md`'s instruction not to silently
 invent requirements, even minor ones.
+
+### 15. `RideStatusHistory` model added in Phase 4, not deferred to Phase 6 (2026-09-22)
+
+**Context:** `docs/erd.md` (Phase 0) already specifies a `RIDE_STATUS_HISTORY` table logging every
+`ride_request` status transition. `MASTER_PLAN.md` §8's Phase 6 checklist is the first place that
+explicitly calls out *writing* history rows ("writes one ride_status_history row per affected
+passenger, same transaction" — for the `DRIVER_ARRIVED`/`STARTED`/`COMPLETED` cascade). But Phase 4
+is where the *first* status transition (`REQUESTED -> MATCHED`, on pool accept) actually happens.
+
+**Decision:** added the `RideStatusHistory` Prisma model now and started writing rows at the
+`MATCHED` transition in `poolService.acceptPool`, rather than adding the model later and having to
+backfill or skip logging the first transition. This isn't scope creep — the table was already
+part of the Phase 0 ERD, and "log every status change, in the same transaction as the change" is
+the ERD's own stated purpose for it, not a Phase-6-only rule. Verified live: two
+`ride_status_history` rows (`REQUESTED -> MATCHED`, `changedBy` = the accepting driver) were
+written for the Nusrat/Rafiq pool-accept flow.
+
+### 16. `GET /api/driver/pools/:id` intentionally not built in Phase 4 (2026-09-22)
+
+**Context:** `MASTER_PLAN.md` §7's table lists this endpoint, but neither Phase 4's nor Phase 6's
+checklist in §8 explicitly calls it out — Phase 4 only lists `GET /api/driver/requests` and
+`POST /api/driver/pools/:poolId/accept`; Phase 6 is about lifecycle-status cascades and
+cancellation.
+
+**Decision:** left it out of Phase 4, keeping the README's API table entry as `⬜ Phase 6` per the
+earlier plan. `GET /api/driver/requests` already returns each `OPEN` pool's full membership detail
+(passengers, seats, zones), so nothing driver-facing is currently missing — a single-pool detail
+view is a natural companion to add alongside Phase 6's status-cascade endpoint instead of as a
+standalone addition now.
