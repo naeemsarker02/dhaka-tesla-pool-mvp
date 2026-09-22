@@ -18,4 +18,6 @@ router.get("/", requireAuth, requireRole("PASSENGER"), rideController.list);
 
 router.get("/:id", requireAuth, requireRole("PASSENGER"), rideController.getById);
 
+router.post("/:id/cancel", requireAuth, requireRole("PASSENGER"), rideController.cancel);
+
 module.exports = router;
