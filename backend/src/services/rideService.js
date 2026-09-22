@@ -2,10 +2,12 @@ const { prisma } = require("../lib/prisma");
 const { getDistanceKm } = require("../data/zones");
 const { calculateEstimatedFarePaisa } = require("../lib/fare");
 const { ValidationError, ForbiddenError } = require("../lib/errors");
+const { matchRideRequest } = require("./matchingService");
 
-// POST /api/rides — MASTER_PLAN.md Section 7/Phase 3. Only creates the ride_request and computes
-// estimated_fare_paisa (no pool discount, Section 5.1). Matching into a pool is Phase 4 — this
-// intentionally does not touch pool_memberships yet.
+// POST /api/rides — MASTER_PLAN.md Section 7. Creates the ride_request with estimated_fare_paisa
+// (no pool discount, Section 5.1), then immediately runs the matching service (Section 3.1/4).
+// A pool_membership may be created, but ride_request.status always stays REQUESTED here — it only
+// becomes MATCHED when a driver accepts the pool (Section 3.1), never at matching time.
 async function createRideRequest(passengerId, { pickupZoneId, destinationZoneId, seatsRequested }) {
   if (pickupZoneId === destinationZoneId) {
     throw new ValidationError("pickupZoneId and destinationZoneId must be different zones");
@@ -26,7 +28,7 @@ async function createRideRequest(passengerId, { pickupZoneId, destinationZoneId,
   const distanceKm = getDistanceKm(pickupZone.name, destinationZone.name);
   const estimatedFarePaisa = calculateEstimatedFarePaisa(distanceKm);
 
-  return prisma.rideRequest.create({
+  const rideRequest = await prisma.rideRequest.create({
     data: {
       passengerId,
       pickupZoneId,
@@ -35,6 +37,10 @@ async function createRideRequest(passengerId, { pickupZoneId, destinationZoneId,
       estimatedFarePaisa,
     },
   });
+
+  await matchRideRequest(rideRequest, pickupZone, destinationZone);
+
+  return rideRequest;
 }
 
 async function getRideRequestById(passengerId, rideRequestId) {

@@ -1,6 +1,5 @@
 // Prisma schema — MySQL provider, per MASTER_PLAN.md Section 1.
-// Built incrementally, phase by phase, per MASTER_PLAN.md Section 8 — do not add models for a
-// later phase ahead of time (e.g. no pools/pool_memberships until Phase 4).
+// Built incrementally, phase by phase, per MASTER_PLAN.md Section 8.
 
 generator client {
   provider = "prisma-client-js"
@@ -34,8 +33,9 @@ model User {
   phone        String
   createdAt    DateTime @default(now()) @map("created_at")
 
-  tesla        Tesla?
-  rideRequests RideRequest[]
+  tesla                 Tesla?
+  rideRequests          RideRequest[]
+  rideStatusChangesMade RideStatusHistory[] @relation("ChangedByUser")
 
   @@map("users")
 }
@@ -51,7 +51,8 @@ model Tesla {
   status    TeslaStatus @default(OFFLINE)
   createdAt DateTime    @default(now()) @map("created_at")
 
-  driver User @relation(fields: [driverId], references: [id])
+  driver User   @relation(fields: [driverId], references: [id])
+  pools  Pool[]
 
   @@map("teslas")
 }
@@ -104,5 +105,69 @@ model RideRequest {
   pickupZone      Zone @relation("PickupZone", fields: [pickupZoneId], references: [id])
   destinationZone Zone @relation("DestinationZone", fields: [destinationZoneId], references: [id])
 
+  poolMembership PoolMembership?
+  statusHistory  RideStatusHistory[]
+
   @@map("ride_requests")
+}
+
+// One row per status transition, per docs/erd.md — written inside the same transaction as the
+// transition itself (pool accept, lifecycle cascade, cancellation).
+model RideStatusHistory {
+  id            String   @id @default(uuid())
+  rideRequestId String   @map("ride_request_id")
+  fromStatus    String   @map("from_status")
+  toStatus      String   @map("to_status")
+  changedAt     DateTime @default(now()) @map("changed_at")
+  changedBy     String   @map("changed_by")
+
+  rideRequest   RideRequest @relation(fields: [rideRequestId], references: [id])
+  changedByUser User        @relation("ChangedByUser", fields: [changedBy], references: [id])
+
+  @@map("ride_status_history")
+}
+
+enum PoolStatus {
+  OPEN
+  MATCHED
+  DRIVER_ARRIVED
+  STARTED
+  COMPLETED
+  CANCELLED
+
+  @@map("pool_status")
+}
+
+// No separate FULL status — "full" is computed (seats_occupied >= tesla.capacity), per
+// docs/erd.md. One non-terminal (OPEN/MATCHED/DRIVER_ARRIVED/STARTED) pool per Tesla is an
+// app-layer invariant, not a DB constraint — docs/decisions.md item 7.
+model Pool {
+  id            String     @id @default(uuid())
+  teslaId       String     @map("tesla_id")
+  status        PoolStatus @default(OPEN)
+  seatsOccupied Int        @default(0) @map("seats_occupied")
+  createdAt     DateTime   @default(now()) @map("created_at")
+  matchedAt     DateTime?  @map("matched_at")
+  completedAt   DateTime?  @map("completed_at")
+
+  tesla       Tesla            @relation(fields: [teslaId], references: [id])
+  memberships PoolMembership[]
+
+  @@map("pools")
+}
+
+// pool_memberships is the ONLY relationship between pools and ride_requests — ride_requests has
+// no pool_id column (docs/erd.md). ride_request_id is UNIQUE: one ride request can never be a
+// member of two pools.
+model PoolMembership {
+  id            String   @id @default(uuid())
+  poolId        String   @map("pool_id")
+  rideRequestId String   @unique @map("ride_request_id")
+  seats         Int
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  pool        Pool        @relation(fields: [poolId], references: [id])
+  rideRequest RideRequest @relation(fields: [rideRequestId], references: [id])
+
+  @@map("pool_memberships")
 }
