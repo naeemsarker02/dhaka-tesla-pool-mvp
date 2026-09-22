@@ -5,9 +5,10 @@
 A ride-pooling MVP built for the RoBenDevs Software Engineer assessment. Passengers request rides
 between predefined Dhaka zones; compatible requests are pooled into a single Tesla trip so riders
 share a car (and split part of the cost) while still tracking their own fare and status
-individually. **Current state: Phase 4 in progress (backend auth, Tesla registration, ride
-requests + fare estimation, and Tesla pooling/matching/driver-accept, all verified against a real
-MySQL/MariaDB instance). Frontend not started yet.**
+individually. **Current state: Phase 5 in progress (backend auth, Tesla registration, ride
+requests + fare estimation, Tesla pooling/matching/driver-accept, and row-locked capacity
+enforcement, all verified against a real MySQL/MariaDB instance — including a real concurrency
+test). Frontend not started yet.**
 
 ## Problem Statement
 
@@ -47,8 +48,8 @@ statuses bleed into each other is the actual engineering problem this MVP solves
 **Pooling**
 - [x] Deterministic zone-cluster matching (no map API) — verified live with the exact Nusrat/Rafiq
   scenario
-- [ ] Capacity-safe concurrent seat claiming (`SELECT ... FOR UPDATE`) — basic capacity check
-  exists (Phase 4), row-locked concurrency hardening is Phase 5
+- [x] Capacity-safe concurrent seat claiming (`SELECT ... FOR UPDATE`) — proven with a real-database
+  concurrency test (`npm run test:integration`), not just mocks
 - [x] Fare finalization on pool `MATCHED` — exact integer match to the Section 5.2 worked example
   (৳70.50 / ৳85.50), verified live
 
@@ -154,16 +155,25 @@ Not yet available — lands in Phase 9 (`feature/docker-deploy`). A backend + My
 
 ```bash
 cd backend
-npm test
+npm test                  # unit tests — mocked Prisma, no DB required
+npm run test:integration  # real-database concurrency test — requires DATABASE_URL
 ```
 
-41 tests currently pass (`health`, `auth`, `tesla`, `fare`, `ride`, `pool`, `poolAccept` suites) —
-`fare`/`poolAccept` assert exact integer-paisa values against the master plan's worked example
-(no floating-point comparisons, including the Nusrat/Rafiq ৳70.50/৳85.50 pooled fares); the rest
-use a **mocked** Prisma client (no live DB required) covering validation, hashing, JWT issuance,
-role/ownership guards, matching logic, and HTTP status mapping. Endpoint behavior has separately
-been verified live against a real database, including the full Nusrat+Rafiq pooling scenario (see
-`docs/PROGRESS.md` Phase 4). Required coverage overall is tracked in `MASTER_PLAN.md` Section 9.
+42 unit tests currently pass (`health`, `auth`, `tesla`, `fare`, `ride`, `pool`, `poolAccept`
+suites) — `fare`/`poolAccept` assert exact integer-paisa values against the master plan's worked
+example (no floating-point comparisons, including the Nusrat/Rafiq ৳70.50/৳85.50 pooled fares); the
+rest use a **mocked** Prisma client (no live DB required) covering validation, hashing, JWT
+issuance, role/ownership guards, matching logic, and HTTP status mapping.
+
+`npm run test:integration` runs a separate, real-database concurrency test
+(`tests/integration/concurrency.test.js`) that races two concurrent seat claims for the last seat
+on a Tesla and asserts exactly one wins and `seats_occupied` never exceeds capacity — proving the
+`SELECT ... FOR UPDATE` row lock actually works, which a mocked client can't simulate. Confirmed
+deterministic across 5 consecutive runs against a live MySQL/MariaDB instance.
+
+Endpoint behavior has separately been verified live against a real database, including the full
+Nusrat+Rafiq pooling scenario (see `docs/PROGRESS.md` Phase 4). Required coverage overall is
+tracked in `MASTER_PLAN.md` Section 9.
 
 ## Demo Credentials
 
