@@ -431,5 +431,82 @@ framing doesn't map 1:1 onto this codebase's automatic-matching design (no dedic
 endpoint exists) — resolved as a graceful internal fallback instead, reasoned through in
 `docs/decisions.md` item 17.
 
-**Next task:** Phase 6 — `feature/ride-lifecycle` (state-machine transition guards,
-`PATCH /api/driver/pools/:poolId/status` cascade, `POST /api/rides/:id/cancel`).
+**~~Merged into `master`~~** — merged `--no-ff` (`830f7b0`) and pushed.
+
+**Next task:** Phase 6 — see below.
+
+---
+
+## Phase 6 — `feature/ride-lifecycle`
+
+**Status:** Complete on branch `feature/ride-lifecycle`, verified live end-to-end against the same
+MariaDB instance. No new unspecified-requirement calls this phase — implementation follows
+`MASTER_PLAN.md` §6.1/§7 precisely, no new `docs/decisions.md` entries needed.
+
+**What was implemented:**
+- **Shared state-machine helper** (`src/lib/stateMachine.js`): `POOL_TRANSITIONS` and
+  `RIDE_REQUEST_TRANSITIONS` tables (kept separate per entity even though their shapes match,
+  since `RideRequest.status` and `Pool.status` are never conflated — `CLAUDE.md`), plus a
+  `canTransition` helper. `poolService.acceptPool` (Phase 4) now uses this table too, instead of
+  its own inline `OPEN`-only check.
+- **`PATCH /api/driver/pools/:poolId/status`** (`poolService.advancePoolStatus`): validates the
+  pool transition (`MATCHED->DRIVER_ARRIVED->STARTED->COMPLETED`, no skipping), ownership, then in
+  one transaction cascades every member's `ride_request` to the same target status with the
+  matching timestamp column (`arrivedAt`/`startedAt`/`completedAt`) and writes one
+  `ride_status_history` row per member. Sets `pool.completedAt` on the `COMPLETED` transition.
+- **`POST /api/rides/:id/cancel`** (`rideService.cancelRideRequest`): full Section 6.1 flow in one
+  transaction — re-checks status (avoiding a stale-read race with a driver simultaneously
+  advancing the pool), only valid from `REQUESTED`/`MATCHED`, sets `CANCELLED` + `cancelledAt`,
+  writes history, and if a `pool_membership` exists: row-locks the pool (`SELECT ... FOR UPDATE`,
+  same Section 6 pattern as the seat claim) before deleting the membership and decrementing
+  `seats_occupied`; cancels the pool too if that was its last member (whether the pool was `OPEN`
+  or already `MATCHED`).
+- **`GET /api/driver/pools/:id`** and **`GET /api/driver/history`**: the two endpoints deferred
+  from Phase 4 (`docs/decisions.md` item 16) — full single-pool detail (any status, not just
+  `OPEN`) and all-pools-for-this-Tesla history respectively.
+
+**Files changed:** `backend/src/lib/stateMachine.js` (new),
+`backend/src/services/{poolService,rideService}.js`,
+`backend/src/controllers/{driverController,rideController}.js`,
+`backend/src/routes/{driver,rides}.js`, `backend/src/validators/pool.js` (new).
+
+**Tests added:** `backend/tests/poolStatus.test.js` (7 cases: role guard, invalid status value,
+cross-driver ownership, stage-skip rejection, already-terminal rejection, a full
+`MATCHED->DRIVER_ARRIVED` cascade with history-row assertions, and `STARTED->COMPLETED` setting
+`pool.completedAt`) and `backend/tests/cancel.test.js` (7 cases: cross-passenger ownership,
+rejection from each of `DRIVER_ARRIVED`/`STARTED`/`COMPLETED`, cancel-from-`REQUESTED` with no
+membership to release, cancel-from-`MATCHED` releasing membership + decrementing seats while
+another member remains, and cancelling the last member cancelling an `OPEN` pool and separately a
+`MATCHED` pool).
+
+**Tests passed/failed:** `npx jest --runInBand` → **57/57 passed**. All source files pass
+`node --check`.
+
+**Real-database verification (same live MariaDB instance) — the master plan's explicit "full
+valid lifecycle passes for a pooled pair" requirement:**
+- Ran the complete lifecycle live for a real Nusrat+Rafiq pool: `POST /api/rides` (x2) →
+  auto-matched into one pool → `accept` (`MATCHED`) → `DRIVER_ARRIVED` → attempted skip straight to
+  `COMPLETED` (correctly **409**) → `STARTED` → `COMPLETED`. Confirmed Nusrat's ride request ended
+  with `status: COMPLETED` and all four timestamps (`matchedAt`/`arrivedAt`/`startedAt`/
+  `completedAt`) set, `farePaisa` still `7050` from Phase 4. Confirmed 8 `ride_status_history` rows
+  (2 members × 4 transitions).
+- Cancel-already-`COMPLETED` → correctly **409**.
+- A fresh Shirin request auto-pooled onto Bullet (its other pool was terminal/`COMPLETED`, so
+  Bullet was legitimately eligible again) — cancelling it from `REQUESTED` correctly released the
+  membership, decremented `seats_occupied` to 0, and **cancelled the now-empty pool** — a live,
+  unscripted confirmation of the "cancelling the last member cancels the pool" rule, not just the
+  scenario I'd planned to test.
+- A separate Nusrat+Rafiq pool: accepted, Nusrat cancelled from `MATCHED` — pool correctly stayed
+  `MATCHED` with `seatsOccupied` decremented to 1, Rafiq's membership and `farePaisa` (8550)
+  untouched (confirms the documented no-retroactive-recalculation limitation, §6.1 step 6).
+  Advanced that pool to `DRIVER_ARRIVED`, then Rafiq's cancel attempt correctly **409**'d.
+- `GET /api/driver/pools/:id` and `GET /api/driver/history` both verified returning correct data
+  live (history showed all 3 pools created during this verification pass, correct statuses).
+- All test data cleared afterward; server process stopped cleanly (port 4000 confirmed free).
+
+**Documentation updated:** This file.
+
+**Known issues / unresolved:** none blocking.
+
+**Next task:** Phase 7 — `feature/frontend-passenger-flow` (Next.js signup/login, request-ride
+form, status tracking, ride history).

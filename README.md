@@ -5,10 +5,10 @@
 A ride-pooling MVP built for the RoBenDevs Software Engineer assessment. Passengers request rides
 between predefined Dhaka zones; compatible requests are pooled into a single Tesla trip so riders
 share a car (and split part of the cost) while still tracking their own fare and status
-individually. **Current state: Phase 5 in progress (backend auth, Tesla registration, ride
-requests + fare estimation, Tesla pooling/matching/driver-accept, and row-locked capacity
-enforcement, all verified against a real MySQL/MariaDB instance — including a real concurrency
-test). Frontend not started yet.**
+individually. **Current state: backend feature-complete through Phase 6 (auth, Tesla registration,
+ride requests + fare estimation, pooling/matching, row-locked capacity enforcement, and the full
+ride lifecycle including cancellation), all verified against a real MySQL/MariaDB instance. Phase 7
+(frontend) not started yet.**
 
 ## Problem Statement
 
@@ -35,15 +35,17 @@ statuses bleed into each other is the actual engineering problem this MVP solves
 - [x] Track ride status (`GET /api/rides/:id`) — reflects `MATCHED` + finalized `farePaisa` once a
   driver accepts the pool
 - [x] Ride history (`GET /api/rides`)
-- [ ] Cancel a ride (from `REQUESTED`/`MATCHED` only)
+- [x] Cancel a ride (`POST /api/rides/:id/cancel`, from `REQUESTED`/`MATCHED` only) — releases the
+  pool seat and cancels an emptied pool, verified live
 
 **Driver**
 - [x] Signup / login, register Tesla (`POST /api/teslas`, driver-only, rejects a second Tesla)
 - [x] Online / offline toggle (`PATCH /api/teslas/:id/status`)
 - [x] View pending pools/requests (`GET /api/driver/requests`)
 - [x] Accept a pool (`POST /api/driver/pools/:poolId/accept`)
-- [ ] Advance pool through `DRIVER_ARRIVED` / `STARTED` / `COMPLETED`
-- [ ] Trip history
+- [x] Advance pool through `DRIVER_ARRIVED` / `STARTED` / `COMPLETED`
+  (`PATCH /api/driver/pools/:poolId/status`) — full lifecycle verified live for a pooled pair
+- [x] Trip history (`GET /api/driver/history`), single-pool detail (`GET /api/driver/pools/:id`)
 
 **Pooling**
 - [x] Deterministic zone-cluster matching (no map API) — verified live with the exact Nusrat/Rafiq
@@ -159,11 +161,12 @@ npm test                  # unit tests — mocked Prisma, no DB required
 npm run test:integration  # real-database concurrency test — requires DATABASE_URL
 ```
 
-42 unit tests currently pass (`health`, `auth`, `tesla`, `fare`, `ride`, `pool`, `poolAccept`
-suites) — `fare`/`poolAccept` assert exact integer-paisa values against the master plan's worked
-example (no floating-point comparisons, including the Nusrat/Rafiq ৳70.50/৳85.50 pooled fares); the
-rest use a **mocked** Prisma client (no live DB required) covering validation, hashing, JWT
-issuance, role/ownership guards, matching logic, and HTTP status mapping.
+57 unit tests currently pass (`health`, `auth`, `tesla`, `fare`, `ride`, `pool`, `poolAccept`,
+`poolStatus`, `cancel` suites) — `fare`/`poolAccept` assert exact integer-paisa values against the
+master plan's worked example (no floating-point comparisons, including the Nusrat/Rafiq
+৳70.50/৳85.50 pooled fares); the rest use a **mocked** Prisma client (no live DB required) covering
+validation, hashing, JWT issuance, role/ownership guards, matching logic, state-machine transition
+guards, and HTTP status mapping.
 
 `npm run test:integration` runs a separate, real-database concurrency test
 (`tests/integration/concurrency.test.js`) that races two concurrent seat claims for the last seat
@@ -230,12 +233,12 @@ Full contract in `MASTER_PLAN.md` Section 7. Implemented so far:
 | GET | `/api/rides/:id` | passenger (own) | ✅ implemented |
 | GET | `/api/rides` | passenger | ✅ implemented |
 | GET | `/api/zones` | public | ✅ implemented (not in master plan's table — added for pickup/destination dropdowns, `docs/decisions.md` item 14) |
-| POST | `/api/rides/:id/cancel` | passenger (own) | ⬜ Phase 6 |
+| POST | `/api/rides/:id/cancel` | passenger (own) | ✅ implemented |
 | GET | `/api/driver/requests` | driver | ✅ implemented |
 | POST | `/api/driver/pools/:poolId/accept` | driver (own) | ✅ implemented |
-| PATCH | `/api/driver/pools/:poolId/status` | driver (own) | ⬜ Phase 6 |
-| GET | `/api/driver/pools/:id` | driver (own) | ⬜ Phase 6 |
-| GET | `/api/driver/history` | driver | ⬜ Phase 6 |
+| PATCH | `/api/driver/pools/:poolId/status` | driver (own) | ✅ implemented |
+| GET | `/api/driver/pools/:id` | driver (own) | ✅ implemented |
+| GET | `/api/driver/history` | driver | ✅ implemented |
 
 ## Key Decisions & Trade-offs
 

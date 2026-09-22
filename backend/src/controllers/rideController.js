@@ -27,4 +27,13 @@ async function list(req, res, next) {
   }
 }
 
-module.exports = { create, getById, list };
+async function cancel(req, res, next) {
+  try {
+    const rideRequest = await rideService.cancelRideRequest(req.user.id, req.params.id);
+    res.status(200).json(rideRequest);
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { create, getById, list, cancel };
