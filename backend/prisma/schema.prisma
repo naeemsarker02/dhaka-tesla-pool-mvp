@@ -1,0 +1,12 @@
+// Prisma schema — MySQL provider, per MASTER_PLAN.md Section 1.
+// Phase 1 scope: datasource + generator only. Models are added starting Phase 2
+// (users, teslas) per MASTER_PLAN.md Section 8 — do not add models here yet.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
