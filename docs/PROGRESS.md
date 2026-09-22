@@ -579,5 +579,64 @@ port 3000 was occupied) — this is UI verification, not just a build check:**
 functionally correct, acceptable for an MVP; could be revisited for visual polish later, not a
 functional gap. Passenger flow only — driver UI is Phase 8.
 
-**Next task:** Phase 8 — `feature/frontend-driver-flow` (online/offline toggle, pending pool list,
-accept → passenger/seat view → arrived/start/complete buttons, trip history).
+**~~Merged into `master`~~** — merged `--no-ff` (`6ae8df9`) and pushed.
+
+**Next task:** Phase 8 — see below.
+
+---
+
+## Phase 8 — `feature/frontend-driver-flow`
+
+**Status:** Complete on branch `feature/frontend-driver-flow`, verified live in a real browser —
+full accept → arrive → start → complete flow, with a real Nusrat+Rafiq pool.
+
+**What was implemented:**
+- **Backend addition:** `GET /api/teslas/me` (driver-only) — not in `MASTER_PLAN.md` §7's table;
+  the driver frontend needs some way to discover its own Tesla (id + status) without a hardcoded
+  id. Returns `null` (not 404) when the driver hasn't registered a Tesla yet, since that's a valid
+  state. Flagged in `docs/decisions.md` item 19. Added 3 test cases (`tests/tesla.test.js`).
+- **`/driver`:** dashboard — shows the driver's Tesla (or a register-Tesla form if none exists
+  yet) with an online/offline toggle (`PATCH /api/teslas/:id/status`), and the list of pending
+  `OPEN` pools (`GET /api/driver/requests`) each with an "Accept pool" button
+  (`POST /api/driver/pools/:poolId/accept`) and a "View details" link.
+- **`/driver/pools/[id]`:** full pool manifest (passenger zones, seats, per-member status/fare)
+  plus a single "Mark as `<next status>`" button that only ever offers the one legal next
+  transition (`MATCHED->DRIVER_ARRIVED->STARTED->COMPLETED`, mirroring
+  `backend/src/lib/stateMachine.js`), disappearing once the pool is `COMPLETED`.
+- **`/driver/history`:** all pools tied to the driver's Tesla, any status, via
+  `GET /api/driver/history`.
+- `components/NavBar.js` updated with a driver "History" link.
+
+**Files changed:** `backend/src/services/teslaService.js`,
+`backend/src/controllers/teslaController.js`, `backend/src/routes/teslas.js`,
+`backend/tests/tesla.test.js`, `frontend/app/driver/page.js` (new),
+`frontend/app/driver/pools/[id]/page.js` (new), `frontend/app/driver/history/page.js` (new),
+`frontend/components/NavBar.js`.
+
+**Tests passed/failed:** Backend: `npm test` → **60/60 passed** (57 + 3 new `GET /api/teslas/me`
+cases). Frontend: `npx next build` → clean production build, all 10 routes compiled.
+
+**Real, in-browser verification (Chrome, real backend + frontend dev server, same session as
+Phase 7's browser check):**
+- Seeded a real Nusrat+Rafiq pool via direct API calls, then logged in as Jashim through the UI.
+- Dashboard correctly showed Bullet (`ONLINE`, capacity 3) and the pending pool with both
+  passengers' routes and estimated fares (Banani→Gulshan ৳90.00, Banani→Mohakhali ৳75.00).
+- Clicked "Accept pool" → pool correctly disappeared from "Pending pools" (now `MATCHED`, not
+  `OPEN`).
+- `/driver/history` correctly listed it; clicked through to `/driver/pools/[id]` — **exact fares
+  ৳85.50 (Rafiq) and ৳70.50 (Nusrat) displayed**, matching the Section 5.2 worked example digit for
+  digit.
+- Clicked "Mark as DRIVER_ARRIVED" → both passengers' status badges updated to `DRIVER_ARRIVED` in
+  place. Repeated for `STARTED` and `COMPLETED` — the advance button correctly disappeared once
+  terminal.
+- Checked console for errors: one hydration warning (`cz-shortcut-listen` attribute mismatch) —
+  identified as coming from a browser extension (ColorZilla) injecting a DOM attribute, not an
+  application bug.
+- All test data cleared afterward; both dev server processes stopped cleanly.
+
+**Documentation updated:** This file; `docs/decisions.md` item 19.
+
+**Known issues / unresolved:** none blocking.
+
+**Next task:** Phase 9 — `feature/docker-deploy` (full `docker-compose.yml` with automatic
+migrations/seed, `.env.example` finalized).

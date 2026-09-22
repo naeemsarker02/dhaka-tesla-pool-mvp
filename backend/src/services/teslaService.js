@@ -36,4 +36,12 @@ async function setTeslaStatus(driverId, teslaId, status) {
   return prisma.tesla.update({ where: { id: teslaId }, data: { status } });
 }
 
-module.exports = { registerTesla, setTeslaStatus };
+// GET /api/teslas/me — not in MASTER_PLAN.md Section 7's table; added so the driver frontend can
+// discover its own Tesla (id + online/offline status) without a hardcoded id (docs/decisions.md
+// item 19). Returns null rather than 404 when the driver hasn't registered a Tesla yet — that's a
+// valid state, not an error.
+async function getMyTesla(driverId) {
+  return prisma.tesla.findUnique({ where: { driverId } });
+}
+
+module.exports = { registerTesla, setTeslaStatus, getMyTesla };

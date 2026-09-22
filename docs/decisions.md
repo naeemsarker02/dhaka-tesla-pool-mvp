@@ -258,3 +258,17 @@ set any *other* online Teslas offline for its duration (restored in `afterAll`) 
 Tesla is deterministically the only eligible fallback. Raw `SELECT ... FOR UPDATE` blocking
 behavior was separately confirmed directly (two transactions, one sleeping mid-transaction, the
 second's locking read correctly stalled until the first committed and then saw the updated value).
+
+### 19. Added `GET /api/teslas/me`, not in the master plan's Section 7 table (2026-09-23)
+
+**Context:** Phase 8. The driver frontend (`/driver`) needs to know whether the logged-in driver
+has a Tesla, and if so its id (to call `PATCH /api/teslas/:id/status`) and current online/offline
+status. `MASTER_PLAN.md` §7's table has no "get my own Tesla" endpoint — the closest existing
+options were `POST /api/teslas` (creates, wrong for a read) and `PATCH /api/teslas/:id/status`
+(needs the id as input, which is exactly what's missing).
+
+**Decision:** added `GET /api/teslas/me` (driver-only, ownership implicit since it's scoped to
+`req.user.id`), returning the driver's Tesla or `null` if none registered yet (a valid state, not
+a 404 error — mirrors how the frontend already treats "no Tesla" as a normal case, showing a
+registration form). Same category of small, justified addition as `GET /api/zones`
+(`docs/decisions.md` item 14) — flagged rather than silently added.

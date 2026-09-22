@@ -145,3 +145,48 @@ describe("PATCH /api/teslas/:id/status — ownership", () => {
     expect(res.body.status).toBe("ONLINE");
   });
 });
+
+describe("GET /api/teslas/me", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("returns the driver's own Tesla", async () => {
+    prisma.tesla.findUnique.mockResolvedValue({
+      id: "tesla-1",
+      driverId: "jashim-id",
+      name: "Bullet",
+      capacity: 3,
+      status: "ONLINE",
+    });
+
+    const app = createApp();
+    const res = await request(app)
+      .get("/api/teslas/me")
+      .set("Authorization", `Bearer ${driverToken}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.name).toBe("Bullet");
+  });
+
+  it("returns null when the driver has no Tesla yet", async () => {
+    prisma.tesla.findUnique.mockResolvedValue(null);
+
+    const app = createApp();
+    const res = await request(app)
+      .get("/api/teslas/me")
+      .set("Authorization", `Bearer ${driverToken}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toBeNull();
+  });
+
+  it("rejects a passenger-role token", async () => {
+    const app = createApp();
+    const res = await request(app)
+      .get("/api/teslas/me")
+      .set("Authorization", `Bearer ${passengerToken}`);
+
+    expect(res.status).toBe(403);
+  });
+});
