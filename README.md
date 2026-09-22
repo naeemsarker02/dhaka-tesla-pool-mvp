@@ -5,9 +5,9 @@
 A ride-pooling MVP built for the RoBenDevs Software Engineer assessment. Passengers request rides
 between predefined Dhaka zones; compatible requests are pooled into a single Tesla trip so riders
 share a car (and split part of the cost) while still tracking their own fare and status
-individually. **Current state: backend feature-complete through Phase 6, all verified against a
-real MySQL/MariaDB instance. Passenger frontend (Phase 7) implemented and verified live in a real
-browser. Driver frontend (Phase 8) not started yet.**
+individually. **Current state: backend feature-complete through Phase 6, and both passenger and
+driver frontends (Phases 7–8) implemented and verified live in a real browser, all against a real
+MySQL/MariaDB instance. Docker Compose finalization (Phase 9) not started yet.**
 
 ## Problem Statement
 
@@ -23,9 +23,9 @@ statuses bleed into each other is the actual engineering problem this MVP solves
 ## Features Implemented
 
 > Filled in phase by phase per `MASTER_PLAN.md` Section 8; kept accurate in `docs/PROGRESS.md`.
-> The passenger flow now has a real UI (verified live in a browser); the driver flow is still
-> backend-only (API calls) until Phase 8. Items below have been verified end-to-end against a real
-> MySQL/MariaDB instance (see `docs/PROGRESS.md`), not just mocked tests.
+> Both passenger and driver flows now have real UIs, verified live in a browser. Items below have
+> been verified end-to-end against a real MySQL/MariaDB instance (see `docs/PROGRESS.md`), not
+> just mocked tests.
 
 **Passenger**
 - [x] Signup / login (`POST /api/auth/signup`, `POST /api/auth/login`)
@@ -152,7 +152,7 @@ npx prisma db seed
 npm run dev             # http://localhost:4000
 ```
 
-**Frontend** (passenger flow only — driver UI is Phase 8):
+**Frontend** (both passenger and driver flows):
 
 ```bash
 cd frontend
@@ -247,6 +247,7 @@ Full contract in `MASTER_PLAN.md` Section 7. Implemented so far:
 | POST | `/api/auth/signup` | public | ✅ implemented |
 | POST | `/api/auth/login` | public | ✅ implemented |
 | POST | `/api/teslas` | driver | ✅ implemented (rejects a 2nd Tesla per driver) |
+| GET | `/api/teslas/me` | driver | ✅ implemented (not in master plan's table — added so the frontend can discover its own Tesla, `docs/decisions.md` item 19) |
 | PATCH | `/api/teslas/:id/status` | driver (own) | ✅ implemented |
 | POST | `/api/rides` | passenger | ✅ implemented |
 | GET | `/api/rides/:id` | passenger (own) | ✅ implemented |
