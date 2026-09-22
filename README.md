@@ -5,9 +5,9 @@
 A ride-pooling MVP built for the RoBenDevs Software Engineer assessment. Passengers request rides
 between predefined Dhaka zones; compatible requests are pooled into a single Tesla trip so riders
 share a car (and split part of the cost) while still tracking their own fare and status
-individually. **Current state: Phase 3 in progress (backend auth, Tesla registration, ride
-requests + fare estimation, all verified against a real MySQL/MariaDB instance). Pooling/matching
-and the frontend are not started yet.**
+individually. **Current state: Phase 4 in progress (backend auth, Tesla registration, ride
+requests + fare estimation, and Tesla pooling/matching/driver-accept, all verified against a real
+MySQL/MariaDB instance). Frontend not started yet.**
 
 ## Problem Statement
 
@@ -30,23 +30,27 @@ statuses bleed into each other is the actual engineering problem this MVP solves
 **Passenger**
 - [x] Signup / login (`POST /api/auth/signup`, `POST /api/auth/login`)
 - [x] Request a ride (`POST /api/rides`) — pickup/destination/seats, immediate
-  `estimated_fare_paisa` (no pool discount yet — that's Phase 4)
-- [x] Track ride status (`GET /api/rides/:id`)
+  `estimated_fare_paisa`, automatically attempts pool matching
+- [x] Track ride status (`GET /api/rides/:id`) — reflects `MATCHED` + finalized `farePaisa` once a
+  driver accepts the pool
 - [x] Ride history (`GET /api/rides`)
 - [ ] Cancel a ride (from `REQUESTED`/`MATCHED` only)
 
 **Driver**
 - [x] Signup / login, register Tesla (`POST /api/teslas`, driver-only, rejects a second Tesla)
 - [x] Online / offline toggle (`PATCH /api/teslas/:id/status`)
-- [ ] View pending pools/requests
-- [ ] Accept a pool
+- [x] View pending pools/requests (`GET /api/driver/requests`)
+- [x] Accept a pool (`POST /api/driver/pools/:poolId/accept`)
 - [ ] Advance pool through `DRIVER_ARRIVED` / `STARTED` / `COMPLETED`
 - [ ] Trip history
 
 **Pooling**
-- [ ] Deterministic zone-cluster matching (no map API)
-- [ ] Capacity-safe concurrent seat claiming (`SELECT ... FOR UPDATE`)
-- [ ] Fare finalization on pool `MATCHED`
+- [x] Deterministic zone-cluster matching (no map API) — verified live with the exact Nusrat/Rafiq
+  scenario
+- [ ] Capacity-safe concurrent seat claiming (`SELECT ... FOR UPDATE`) — basic capacity check
+  exists (Phase 4), row-locked concurrency hardening is Phase 5
+- [x] Fare finalization on pool `MATCHED` — exact integer match to the Section 5.2 worked example
+  (৳70.50 / ৳85.50), verified live
 
 ## Screenshots / GIFs
 
@@ -153,12 +157,13 @@ cd backend
 npm test
 ```
 
-31 tests currently pass (`health`, `auth`, `tesla`, `fare`, `ride` suites) — the fare suite asserts
-exact integer-paisa values against the master plan's worked example (no floating-point
-comparisons); the rest use a **mocked** Prisma client (no live DB required) covering validation,
-hashing, JWT issuance, role/ownership guards, and HTTP status mapping. Endpoint behavior has
-separately been verified live against a real database (see Local Setup above). Required coverage
-overall is tracked in `MASTER_PLAN.md` Section 9.
+41 tests currently pass (`health`, `auth`, `tesla`, `fare`, `ride`, `pool`, `poolAccept` suites) —
+`fare`/`poolAccept` assert exact integer-paisa values against the master plan's worked example
+(no floating-point comparisons, including the Nusrat/Rafiq ৳70.50/৳85.50 pooled fares); the rest
+use a **mocked** Prisma client (no live DB required) covering validation, hashing, JWT issuance,
+role/ownership guards, matching logic, and HTTP status mapping. Endpoint behavior has separately
+been verified live against a real database, including the full Nusrat+Rafiq pooling scenario (see
+`docs/PROGRESS.md` Phase 4). Required coverage overall is tracked in `MASTER_PLAN.md` Section 9.
 
 ## Demo Credentials
 
@@ -216,8 +221,8 @@ Full contract in `MASTER_PLAN.md` Section 7. Implemented so far:
 | GET | `/api/rides` | passenger | ✅ implemented |
 | GET | `/api/zones` | public | ✅ implemented (not in master plan's table — added for pickup/destination dropdowns, `docs/decisions.md` item 14) |
 | POST | `/api/rides/:id/cancel` | passenger (own) | ⬜ Phase 6 |
-| GET | `/api/driver/requests` | driver | ⬜ Phase 4 |
-| POST | `/api/driver/pools/:poolId/accept` | driver (own) | ⬜ Phase 4 |
+| GET | `/api/driver/requests` | driver | ✅ implemented |
+| POST | `/api/driver/pools/:poolId/accept` | driver (own) | ✅ implemented |
 | PATCH | `/api/driver/pools/:poolId/status` | driver (own) | ⬜ Phase 6 |
 | GET | `/api/driver/pools/:id` | driver (own) | ⬜ Phase 6 |
 | GET | `/api/driver/history` | driver | ⬜ Phase 6 |

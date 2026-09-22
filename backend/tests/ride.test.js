@@ -1,17 +1,30 @@
 const request = require("supertest");
 
-jest.mock("../src/lib/prisma", () => ({
-  prisma: {
-    zone: {
-      findUnique: jest.fn(),
+// matchRideRequest (called right after ride-request creation) runs inside prisma.$transaction and
+// queries pool/tesla — mocked here to return "nothing compatible, no eligible Tesla" by default,
+// so these tests exercise ride-request creation in isolation. Matching itself is covered by
+// tests/pool.test.js.
+jest.mock("../src/lib/prisma", () => {
+  const tx = {
+    pool: { findMany: jest.fn().mockResolvedValue([]), create: jest.fn(), update: jest.fn() },
+    tesla: { findMany: jest.fn().mockResolvedValue([]) },
+    poolMembership: { create: jest.fn() },
+  };
+  return {
+    prisma: {
+      zone: {
+        findUnique: jest.fn(),
+      },
+      rideRequest: {
+        create: jest.fn(),
+        findUnique: jest.fn(),
+        findMany: jest.fn(),
+      },
+      $transaction: jest.fn((callback) => callback(tx)),
+      __tx: tx,
     },
-    rideRequest: {
-      create: jest.fn(),
-      findUnique: jest.fn(),
-      findMany: jest.fn(),
-    },
-  },
-}));
+  };
+});
 
 const { prisma } = require("../src/lib/prisma");
 const { createApp } = require("../src/app");

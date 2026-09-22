@@ -4,6 +4,7 @@ const authRoutes = require("./routes/auth");
 const teslaRoutes = require("./routes/teslas");
 const rideRoutes = require("./routes/rides");
 const zoneRoutes = require("./routes/zones");
+const driverRoutes = require("./routes/driver");
 const { errorHandler } = require("./middleware/errorHandler");
 
 function createApp() {
@@ -20,6 +21,7 @@ function createApp() {
   app.use("/api/teslas", teslaRoutes);
   app.use("/api/rides", rideRoutes);
   app.use("/api/zones", zoneRoutes);
+  app.use("/api/driver", driverRoutes);
 
   app.use(errorHandler);
 
