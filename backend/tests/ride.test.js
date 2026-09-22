@@ -6,9 +6,10 @@ const request = require("supertest");
 // tests/pool.test.js.
 jest.mock("../src/lib/prisma", () => {
   const tx = {
-    pool: { findMany: jest.fn().mockResolvedValue([]), create: jest.fn(), update: jest.fn() },
-    tesla: { findMany: jest.fn().mockResolvedValue([]) },
+    pool: { findMany: jest.fn().mockResolvedValue([]), findFirst: jest.fn(), create: jest.fn() },
     poolMembership: { create: jest.fn() },
+    $queryRaw: jest.fn().mockResolvedValue([]), // no eligible online Tesla by default
+    $executeRaw: jest.fn(),
   };
   return {
     prisma: {
