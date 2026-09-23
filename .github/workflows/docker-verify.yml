@@ -1,0 +1,54 @@
+name: Docker Compose smoke test
+
+# Verifies `docker compose up` actually brings up a working stack (mysql -> backend migrate/seed
+# -> health check) on every push. This is the one piece of Phase 9 (MASTER_PLAN.md Section 8) that
+# couldn't be verified locally — no Docker Engine was available in the development environment
+# (docs/decisions.md item 21). GitHub Actions' free tier ships Docker preinstalled, so this
+# substitutes as the verification method. Smoke test only, not a full CI suite.
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  docker-compose-smoke-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build and start the full stack
+        run: docker compose up -d --build
+
+      - name: Wait for the backend to report healthy
+        run: |
+          echo "Waiting for backend health check (mysql -> migrate deploy -> db seed -> server start)..."
+          for i in $(seq 1 30); do
+            status=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:4000/health || echo "000")
+            if [ "$status" = "200" ]; then
+              echo "Backend healthy after ${i} attempt(s)."
+              exit 0
+            fi
+            echo "Attempt ${i}/30: got HTTP ${status}, retrying in 5s..."
+            sleep 5
+          done
+          echo "Backend never became healthy."
+          exit 1
+
+      - name: Verify seed data loaded (GET /api/zones)
+        if: always()
+        run: |
+          curl -sf http://localhost:4000/api/zones | head -c 500
+          echo
+
+      - name: Show container logs (always, for diagnosing failures)
+        if: always()
+        run: docker compose logs
+
+      - name: Show container status (always)
+        if: always()
+        run: docker compose ps
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
