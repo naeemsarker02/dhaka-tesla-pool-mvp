@@ -4,7 +4,10 @@ import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { RequireAuth } from "../../../components/RequireAuth";
 import { NavBar } from "../../../components/NavBar";
-import { StatusBadge } from "../../../components/StatusBadge";
+import { StatusStepper } from "../../../components/StatusStepper";
+import { FareDisplay } from "../../../components/FareDisplay";
+import { ErrorBanner } from "../../../components/ErrorBanner";
+import { CardSkeleton } from "../../../components/Skeleton";
 import { useAuth } from "../../../lib/AuthContext";
 import { apiFetch, ApiError } from "../../../lib/api";
 import { formatPaisa } from "../../../lib/format";
@@ -12,6 +15,11 @@ import { formatPaisa } from "../../../lib/format";
 const TERMINAL_STATUSES = ["COMPLETED", "CANCELLED"];
 const CANCELLABLE_STATUSES = ["REQUESTED", "MATCHED"];
 const POLL_INTERVAL_MS = 5000;
+// Mirrors the backend's default GRACE_WINDOW_SECONDS (MASTER_PLAN.md Section 6.2) — display-only
+// heads-up, not authoritative. The server computes the real late_cancellation/fee at cancel time;
+// if a deployment overrides GRACE_WINDOW_SECONDS via env, this warning's timing won't match
+// exactly. Not worth a new endpoint just to mirror one constant (see docs/decisions.md).
+const GRACE_WINDOW_SECONDS = 60;
 
 export default function RideDetailPage() {
   return (
@@ -64,60 +72,67 @@ function RideDetail() {
     }
   }
 
+  const isPastGraceWindow =
+    ride?.status === "MATCHED" &&
+    ride?.matchedAt &&
+    (Date.now() - new Date(ride.matchedAt).getTime()) / 1000 > GRACE_WINDOW_SECONDS;
+
   return (
-    <main className="mx-auto max-w-lg px-6 py-10">
-      <h1 className="mb-6 text-2xl font-semibold">Ride status</h1>
+    <main className="mx-auto max-w-lg px-4 py-8 sm:px-6 sm:py-10">
+      <h1 className="mb-6 text-xl font-semibold text-slate-900">Ride status</h1>
 
-      {error && (
-        <p role="alert" className="rounded bg-red-50 px-3 py-2 text-sm text-red-700">
-          {error}
-        </p>
-      )}
+      {error && <ErrorBanner>{error}</ErrorBanner>}
 
-      {!ride && !error && <p className="text-slate-500">Loading…</p>}
+      {!ride && !error && <CardSkeleton lines={4} />}
 
       {ride && (
-        <div className="space-y-4 rounded border border-slate-200 bg-white p-6">
-          <div className="flex items-center justify-between">
-            <p className="text-lg font-medium">
+        <div className="space-y-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+          <div>
+            <p className="text-lg font-medium text-slate-900">
               {ride.pickupZone.name} → {ride.destinationZone.name}
             </p>
-            <StatusBadge status={ride.status} />
+            <p className="text-sm text-slate-500">{ride.seatsRequested} seat(s)</p>
           </div>
 
-          <dl className="grid grid-cols-2 gap-y-2 text-sm">
-            <dt className="text-slate-500">Seats</dt>
-            <dd>{ride.seatsRequested}</dd>
+          <StatusStepper status={ride.status} />
 
-            <dt className="text-slate-500">Estimated fare</dt>
-            <dd>{formatPaisa(ride.estimatedFarePaisa)}</dd>
+          <div className="border-t border-slate-100 pt-4">
+            <FareDisplay estimatedFarePaisa={ride.estimatedFarePaisa} farePaisa={ride.farePaisa} />
+          </div>
 
-            <dt className="text-slate-500">Final fare</dt>
-            <dd>
-              {ride.farePaisa === null
-                ? "Not finalized yet — set when a driver accepts your pool"
-                : formatPaisa(ride.farePaisa)}
-            </dd>
-
-            <dt className="text-slate-500">Requested</dt>
-            <dd>{new Date(ride.requestedAt).toLocaleString()}</dd>
-          </dl>
-
-          {cancelError && (
-            <p role="alert" className="rounded bg-red-50 px-3 py-2 text-sm text-red-700">
-              {cancelError}
-            </p>
+          {ride.status === "CANCELLED" && ride.lateCancellation && (
+            <div className="rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-800 ring-1 ring-inset ring-amber-700/10">
+              <p className="font-medium">Cancelled after the free-cancellation window</p>
+              <p className="mt-0.5">
+                A late-cancellation fee of {formatPaisa(ride.cancellationFeePaisa)} was recorded
+                (not charged — no payment gateway in this MVP).
+              </p>
+            </div>
           )}
 
+          <p className="text-xs text-slate-400">
+            Requested {new Date(ride.requestedAt).toLocaleString()}
+          </p>
+
+          {cancelError && <ErrorBanner>{cancelError}</ErrorBanner>}
+
           {CANCELLABLE_STATUSES.includes(ride.status) && (
-            <button
-              type="button"
-              onClick={handleCancel}
-              disabled={isCancelling}
-              className="w-full rounded border border-red-300 px-4 py-2 text-red-700 hover:bg-red-50 disabled:opacity-50"
-            >
-              {isCancelling ? "Cancelling…" : "Cancel this ride"}
-            </button>
+            <div className="space-y-2 border-t border-slate-100 pt-4">
+              {isPastGraceWindow && (
+                <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 ring-1 ring-inset ring-amber-700/10">
+                  It's been over a minute since you were matched — cancelling now may be flagged as
+                  a late cancellation with a recorded (not charged) fee.
+                </p>
+              )}
+              <button
+                type="button"
+                onClick={handleCancel}
+                disabled={isCancelling}
+                className="w-full rounded-lg border border-red-300 px-4 py-2.5 text-sm font-medium text-red-700 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isCancelling ? "Cancelling…" : "Cancel this ride"}
+              </button>
+            </div>
           )}
         </div>
       )}
