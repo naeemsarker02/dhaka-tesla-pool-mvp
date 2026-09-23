@@ -338,12 +338,60 @@ pass did everything verifiable *without* a Docker Engine and documented the gap 
   left over from an interrupted earlier build — not a code bug) and `node src/server.js` (backend,
   already verified live in the prior backfill pass).
 
-**What's still unverified, honestly:** an actual `docker compose up --build` run — container
+**What was still unverified at the time:** an actual `docker compose up --build` run — container
 networking, the `mysql:8` healthcheck gating, the entrypoint's `prisma migrate deploy`/`db seed`
 sequence executing inside the container, and MySQL 8 specifically (vs. the MariaDB 10.4 this repo
 has been live-verified against throughout, per item 13). Documented as the top item in README's
 Known Limitations rather than silently assumed to work — this is a repo audit's job (flag the gap),
-not a job to fabricate a verification that didn't happen.
+not a job to fabricate a verification that didn't happen. **Resolved the same day — see item 22.**
 
 **Also written this pass:** `docs/scaling.md` (Section 10 bonus doc, reasoning-only — was
 referenced from the README's Concurrency Handling section as "not yet written" since Phase 0).
+
+---
+
+### 22. Docker Compose verified via GitHub Actions CI, and a real Prisma-on-Alpine bug it caught (2026-09-23)
+
+**Context:** item 21 flagged that `docker compose up` had never actually been run — no Docker
+Engine was available locally. GitHub Actions' free tier ships Docker preinstalled, so
+`.github/workflows/docker-verify.yml` was added: build the full stack, poll `GET /health` until it
+returns 200 (or fail after 30 attempts), spot-check seed data via `GET /api/zones`, dump container
+logs/status for diagnosis, always tear down.
+
+**First real run found two bugs immediately — exactly why this was worth doing, not a formality:**
+
+1. **Port 3306 conflict.** `ubuntu-latest` GitHub Actions runners ship with a system MySQL service
+   already listening on port 3306, colliding with the `mysql` service's `"3306:3306"` port mapping.
+   `docker compose up -d --build` failed outright. Fixed with a
+   `sudo systemctl stop mysql.service || true` step before compose starts.
+
+2. **Prisma's engine binaries need OpenSSL, which `node:20-alpine` doesn't ship.** With the port
+   conflict fixed, `mysql` came up healthy, but the `backend` container's
+   `docker-entrypoint.sh` (`prisma migrate deploy`) failed with
+   `Error: Could not parse schema engine response: SyntaxError: Unexpected token 'E', "Error
+   load"... is not valid JSON` — Prisma's schema-engine binary couldn't start (missing `libssl`),
+   printed a plain-text error instead of the JSON the CLI expected, and the CLI's JSON parser choked
+   on it. Prisma's own warning in the same log said exactly what to do:
+   `"Please manually install OpenSSL and try installing Prisma again."` Fixed by adding
+   `RUN apk add --no-cache openssl` to `backend/Dockerfile`, before `npm install`/`prisma generate`.
+
+**Third run succeeded end-to-end:** `mysql` (real `mysql:8`, healthy) → `backend` (migrations
+applied, seed run, `GET /health` → 200) → confirmed via `GET /api/zones` returning all 8 real seeded
+zones with correct clusters, not a stub/empty response. Phase 9's last open item — "Integration
+verification: full stack exercised against the Dockerized stack" — is now genuinely satisfied, via
+CI rather than a local Docker Engine.
+
+**Why this matters beyond just "it works now":** this is a textbook demonstration of why
+Section 13/Phase 9's Docker requirement can't be satisfied by reading Dockerfiles carefully, no
+matter how thoroughly — both bugs were invisible from static review (item 21's approach) and only
+surfaced by actually running the stack. Neither would have been caught by the unit tests, the
+integration test, or the manual `next build`/`node src/server.js` checks done in item 21, since none
+of those exercise the Alpine base image's OpenSSL availability or the container networking/port
+allocation at all.
+
+**How to read this going forward:** GitHub Actions CI is now the standing verification method for
+the Dockerized stack in this environment (no Docker Engine locally, and MySQL 8 specifically — not
+just MariaDB — is exercised this way too, closing the Phase 2 carry-forward item). Future changes
+to `docker-compose.yml`, either Dockerfile, or `docker-entrypoint.sh` are verified by pushing and
+checking `.github/workflows/docker-verify.yml`'s run, the same way `npm test` verifies backend
+logic changes.

@@ -8,11 +8,10 @@ share a car (and split part of the cost) while still tracking their own fare and
 individually. **Current state: backend feature-complete (Phases 1–6, plus a Section 13/6.2
 backfill — idempotency, one-active-ride, seat bounds, grace-window cancellation), both passenger
 and driver frontends (Phases 7–8) implemented and verified live in a real browser, and a full
-`docker-compose.yml` (backend + frontend + MySQL 8, automatic migrations/seed) is in place
-(Phase 9). All backend behavior verified against a real MySQL/MariaDB instance directly; the
-Dockerized stack itself has been statically validated (YAML syntax, Dockerfile logic, production
-builds) but not yet run end-to-end with a real Docker Engine — no Docker installation was
-available in this environment. See Known Limitations.**
+`docker-compose.yml` (backend + frontend + real MySQL 8, automatic migrations/seed) is in place and
+verified end-to-end via CI (Phase 9 — no Docker installation is available in the local development
+environment, so GitHub Actions substitutes; see `.github/workflows/docker-verify.yml` and
+`docs/decisions.md` item 22, which also covers two real bugs that first CI run caught).**
 
 ## Problem Statement
 
@@ -223,11 +222,13 @@ automatically).
 All environment values in `docker-compose.yml` are MVP dev-only defaults, documented inline, never
 real secrets — override them (e.g. via `docker compose --env-file`) for any real deployment.
 
-**Verification status:** the compose file's YAML has been validated, each Dockerfile's logic
-reviewed line by line, and the production builds it runs (`next build`/`next start`,
-`node src/server.js`) have been exercised directly outside Docker. The full containerized stack
-has **not** been run end-to-end with a live Docker Engine, since none was available in the
-development environment — flagged explicitly rather than claimed, see Known Limitations.
+**Verification status:** verified end-to-end via CI — `.github/workflows/docker-verify.yml` runs
+`docker compose up -d --build` on every push (no Docker Engine is available in the local
+development environment, so GitHub Actions substitutes), polls `GET /health` until the backend
+reports healthy, and spot-checks that seed data actually loaded via `GET /api/zones`. The first
+real run caught two genuine bugs invisible to static review — a port-3306 conflict with the
+runner's preinstalled MySQL, and a missing-OpenSSL issue that broke Prisma's engine binaries inside
+`node:20-alpine` — both fixed; see `docs/decisions.md` item 22 for the full account.
 
 ## Running Tests
 
@@ -343,11 +344,13 @@ See [`docs/decisions.md`](./docs/decisions.md) for the running, dated log. Highl
 - No automatic stale-`OPEN`-pool expiry — a pool no driver ever accepts stays `OPEN` until the
   passenger cancels it themselves (documented MVP decision, `MASTER_PLAN.md` Section 13.3).
 - No driver-initiated cancellation (no-show, emergency) — out of scope for this MVP.
-- The Dockerized stack (`docker compose up`) has been statically validated (YAML, Dockerfile
-  logic, production builds run directly) but not exercised end-to-end against a live Docker
-  Engine — none was available in the development environment. The same migrations/queries have
-  been verified live against MariaDB 10.4, not MySQL 8 specifically (`docs/decisions.md` item 13);
-  a first real `docker compose up` run is the natural next check before submission.
+- No Docker Engine is available in the local development environment used to build this MVP —
+  `docker compose up` is verified via GitHub Actions CI instead
+  (`.github/workflows/docker-verify.yml`, `docs/decisions.md` item 22), not on a developer machine.
+  This has been sufficient to catch real bugs (a CI-runner port conflict, a missing-OpenSSL issue
+  in the Alpine base image) and to confirm the full stack — including real `mysql:8`, not just the
+  MariaDB 10.4 used for local development — comes up healthy with migrations and seed data applied
+  automatically. A `docker compose up` run on an actual developer machine has still not happened.
 - Single-region deploy, no read replicas, no distributed lock — see
   [`docs/scaling.md`](./docs/scaling.md) (bonus) for the reasoning-only scale-out path.
 
@@ -389,6 +392,16 @@ implemented all four** exactly per their master-plan spec (see `docs/decisions.m
 than re-designing them — this was a documentation/code gap, not an ambiguous requirement needing a
 new decision. Also completed Phase 9 (Docker Compose finalization: healthchecks, automatic
 migration/seed entrypoint, `GRACE_WINDOW_SECONDS` wired through) and this README pass.
+
+**Same day — CI-driven Docker verification:** with no Docker Engine available locally, added
+`.github/workflows/docker-verify.yml` to use GitHub Actions' preinstalled Docker as the
+verification method instead of claiming the Dockerized stack worked from static review alone. This
+immediately surfaced two real bugs neither static review nor any local test had caught: a port
+3306 conflict with the CI runner's preinstalled MySQL service, and `node:20-alpine` missing
+OpenSSL, which broke Prisma's schema-engine binary inside the `backend` container
+(`Could not parse schema engine response... is not valid JSON` — Prisma's own error text said
+exactly what to install). Both fixed and confirmed by a fully green CI run, including a real
+`GET /api/zones` response with all 8 seeded zones. See `docs/decisions.md` item 22.
 
 ## Demo Video
 

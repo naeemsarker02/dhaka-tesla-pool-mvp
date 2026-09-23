@@ -713,8 +713,8 @@ Rev 5 note and Section 8 phase statuses.
 
 ## Phase 9 — `feature/docker-deploy`
 
-**Status:** Complete as far as verifiable without a Docker Engine (see Known issues below — this
-is the one phase in this project not fully live-verified, flagged explicitly rather than assumed).
+**Status:** Complete — genuinely verified end-to-end, via GitHub Actions CI (no Docker Engine is
+available in the local development environment; CI substitutes for it, see the update below).
 
 **What was implemented (Dockerfiles/compose already existed from earlier work on this branch;
 this pass reviewed, fixed, and verified everything that could be verified):**
@@ -757,16 +757,38 @@ edits to confirm no regression). `npm run test:integration` → 1/1.
   artifact, not a code bug); `node src/server.js` (backend, already live-verified in the Section
   13/6.2 backfill pass immediately prior).
 
-**Known issues / unresolved:**
-- **Not run end-to-end with a live Docker Engine.** Container networking, the `mysql:8`
-  healthcheck gating startup order, and the entrypoint's automatic migrate/seed sequence executing
-  *inside* a container have not been observed directly — only reasoned through by reading the
-  configuration. This is the top item in README's Known Limitations, not silently assumed to work.
-- Relatedly, MySQL 8 specifically (vs. MariaDB 10.4, the local dev DB used for every other live
-  verification in this project, `docs/decisions.md` item 13) has not been directly exercised —
-  Phase 2's carry-forward item is still technically open.
-- No public deployment yet (Phase 10/11, needs actual hosting credentials/account access this
-  session doesn't have).
+**Known issues / unresolved at the time this section was first written:**
+- Not run end-to-end with a live Docker Engine — reasoned through by reading the configuration
+  only. Flagged in README's Known Limitations rather than assumed to work.
+- MySQL 8 specifically (vs. MariaDB 10.4, the local dev DB) had not been directly exercised —
+  Phase 2's carry-forward item was still technically open.
+- No public deployment yet.
+
+**Resolved the same day, via GitHub Actions CI (2026-09-23):** added
+`.github/workflows/docker-verify.yml` — builds the full stack, polls `GET /health` until 200,
+spot-checks seed data via `GET /api/zones`, dumps logs, tears down. No Docker Engine is available
+locally, but GitHub Actions' free tier ships one, and it's real `mysql:8`, closing the Phase 2
+carry-forward item too.
+
+**The first CI run immediately caught two real bugs** that static Dockerfile review had missed:
+1. `ubuntu-latest` runners ship a system MySQL already bound to port 3306, colliding with the
+   `mysql` service's port mapping — `docker compose up` failed outright. Fixed with a
+   `systemctl stop mysql.service` step before compose starts.
+2. With that fixed, `backend`'s `prisma migrate deploy` failed inside the container:
+   `node:20-alpine` doesn't ship OpenSSL, so Prisma's schema-engine binary couldn't start and
+   printed a non-JSON error the CLI choked on. Prisma's own log said exactly what to do — fixed
+   with `apk add --no-cache openssl` in `backend/Dockerfile`. See `docs/decisions.md` item 22 for
+   the full account, including why this is exactly the kind of bug that's invisible without
+   actually running the stack.
+
+**Third CI run succeeded end-to-end**, confirmed via the workflow's own log: MySQL healthy →
+backend migrations applied + seeded + `GET /health` → 200 → `GET /api/zones` returned all 8 real
+seeded zones with correct clusters. Phase 9's Docker requirement is now genuinely, not just
+statically, verified.
+
+**Status correction:** the "Not run end-to-end" limitation above is resolved. Updated
+`README.md` Known Limitations, `MASTER_PLAN.md`'s Phase 9 checklist, and the top status line of
+this section accordingly.
 
 **Next task:** Phase 10 — pre-release stabilization (full test pass together, docs review,
 screenshots, then cut `pre-release`). Phase 11 (6-minute video + `release/v1.0.0`) needs the

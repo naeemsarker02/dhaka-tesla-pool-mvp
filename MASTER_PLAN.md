@@ -662,10 +662,12 @@ against `docs/PROGRESS.md` for per-item confirmation.
 
 ### Phase 9 — Docker, Deployment & Integration
 **Branch:** `feature/docker-deploy`
-**Status:** COMPLETE as far as verifiable without a live Docker Engine (none available in this
-environment — `docker`/`docker compose` not installed, confirmed both in the POSIX shell and
-PowerShell). See the two unchecked items below and `docs/decisions.md` item 21 — flagged
-explicitly, not silently assumed to work.
+**Status:** COMPLETE — genuinely verified end-to-end via GitHub Actions CI (no Docker Engine is
+available in this environment — `docker`/`docker compose` not installed in either the POSIX shell
+or PowerShell — so `.github/workflows/docker-verify.yml` substitutes, using GitHub Actions'
+preinstalled Docker). The first CI run caught two real bugs (a runner port-3306 conflict, and
+`node:20-alpine` missing OpenSSL for Prisma's engine binaries) that static Dockerfile review had
+missed; both fixed, third run green. See `docs/decisions.md` items 21–22.
 - [x] Dockerfiles for backend and frontend
 - [x] Full `docker-compose.yml`: backend, frontend, **mysql:8** (real MySQL, not MariaDB),
       healthchecks (`mysqladmin ping` for MySQL, `GET /health` for backend, `frontend` now gated
@@ -682,12 +684,11 @@ explicitly, not silently assumed to work.
       backfill pass)
 - [ ] Free-tier deployment — not attempted (needs real hosting-provider credentials/account access
       this session doesn't have; Phase 10/11 item)
-- [ ] Integration verification against the actual Dockerized stack — **not performed**, no Docker
-      Engine available. `docker-compose.yml`'s YAML was syntax-validated and every Dockerfile/
-      entrypoint script reviewed line by line instead; the underlying migrations/queries remain
-      verified only against MariaDB 10.4 live, not MySQL 8 directly (Phase 2's carry-forward item
-      is still technically open). A real `docker compose up --build` run is the natural next check
-      before submission.
+- [x] Integration verification against the actual Dockerized stack — done via
+      `.github/workflows/docker-verify.yml` on GitHub Actions (real `mysql:8`, not just MariaDB —
+      closes Phase 2's carry-forward item): `docker compose up -d --build` → MySQL healthy →
+      backend migrations applied + seeded → `GET /health` → 200 → `GET /api/zones` confirmed
+      returning all 8 real seeded zones. See `docs/decisions.md` item 22.
 
 ### Phase 10 — Pre-release Stabilization
 **Branch:** cut `pre-release` from `master` (`--no-ff`)
