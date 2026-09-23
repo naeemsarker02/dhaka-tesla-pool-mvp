@@ -691,3 +691,27 @@ confirmed unconflated in item 25's audit), and load-bearing across Phases 4-8's 
 rename now would touch the schema, both services, every route/controller referencing pool status,
 and every test asserting on it, for zero functional benefit, purely to match an instruction that
 no longer has any live representation to conflict with.
+
+### 28. Vercel's first production deploy silently shipped from `master`, missing the dashboard polish (2026-09-23)
+
+**Context:** initial Vercel import auto-selected the repo's default branch (`master`) before the
+Production-branch setting was changed to `pre-release`. Vercel has no UI action to redeploy an
+existing branch without a new commit event, so the live site kept serving the `master` build even
+after the setting changed.
+
+**The mistake, stated plainly:** `master` never received PR #5
+(`feature/frontend-dashboard-polish`) — item 27 above already documents *why* (direct pushes onto
+`master` during CI firefighting, bypassing the normal `pre-release` merge path). A first look at
+just the two branch tips' commit diff (`6ff42fa` vs `8783816`) wrongly suggested the delta was
+backend-only (an Aiven CA-cert commit) and the live build was therefore equivalent either way. That
+was false: `git diff --stat master pre-release` shows 50 files changed, +1616/-503, entirely
+`frontend/` — `StatusStepper`, `SeatOccupancy`, `FareDisplay`, `EmptyState`, `ErrorBanner`,
+`Skeleton`, the Tailwind design-system rebuild of every page, and the mobile-responsive screenshots
+PR #5 added. None of it was live. Root cause of the wrong read: comparing branch *tips* is not the
+same as comparing full branch history — `master` is missing an entire merged PR's worth of commits
+that `pre-release` has, not just one commit's diff.
+
+**Fix:** pushed an empty `chore(deploy):` commit to `pre-release` to give Vercel a build event on
+the correct branch (Vercel deploys entirely from Git push events; there's no "deploy this existing
+branch" button), then re-ran the live smoke test against the new deployment to confirm the
+dashboard-polish UI is actually what's serving before taking README screenshots.
