@@ -5,6 +5,10 @@ import Link from "next/link";
 import { RequireAuth } from "../../components/RequireAuth";
 import { NavBar } from "../../components/NavBar";
 import { StatusBadge } from "../../components/StatusBadge";
+import { SeatOccupancy } from "../../components/SeatOccupancy";
+import { ErrorBanner } from "../../components/ErrorBanner";
+import { EmptyState } from "../../components/EmptyState";
+import { CardSkeleton, ListSkeleton } from "../../components/Skeleton";
 import { useAuth } from "../../lib/AuthContext";
 import { apiFetch, ApiError } from "../../lib/api";
 import { formatPaisa } from "../../lib/format";
@@ -79,23 +83,19 @@ function DriverDashboard() {
   }
 
   return (
-    <main className="mx-auto max-w-2xl px-6 py-10">
-      <h1 className="mb-6 text-2xl font-semibold">Driver console</h1>
+    <main className="mx-auto max-w-2xl px-4 py-8 sm:px-6 sm:py-10">
+      <h1 className="mb-6 text-xl font-semibold text-slate-900">Driver console</h1>
 
-      {teslaError && (
-        <p role="alert" className="mb-6 rounded bg-red-50 px-3 py-2 text-sm text-red-700">
-          {teslaError}
-        </p>
-      )}
+      {teslaError && <div className="mb-6"><ErrorBanner>{teslaError}</ErrorBanner></div>}
 
-      {tesla === undefined && !teslaError && <p className="text-slate-500">Loading your Tesla…</p>}
+      {tesla === undefined && !teslaError && <div className="mb-8"><CardSkeleton lines={1} /></div>}
 
       {tesla === null && <RegisterTeslaForm token={token} onRegistered={setTesla} />}
 
       {tesla && (
-        <div className="mb-8 flex items-center justify-between rounded border border-slate-200 bg-white p-4">
+        <div className="mb-8 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <div>
-            <p className="font-medium">{tesla.name}</p>
+            <p className="font-medium text-slate-900">{tesla.name}</p>
             <p className="text-sm text-slate-500">Capacity {tesla.capacity}</p>
           </div>
           <div className="flex items-center gap-3">
@@ -104,7 +104,7 @@ function DriverDashboard() {
               type="button"
               onClick={handleToggle}
               disabled={isToggling}
-              className="rounded border border-slate-300 px-3 py-1 text-sm hover:bg-slate-100 disabled:opacity-50"
+              className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isToggling ? "Updating…" : tesla.status === "ONLINE" ? "Go offline" : "Go online"}
             </button>
@@ -112,62 +112,69 @@ function DriverDashboard() {
         </div>
       )}
 
-      {actionError && (
-        <p role="alert" className="mb-4 rounded bg-red-50 px-3 py-2 text-sm text-red-700">
-          {actionError}
-        </p>
-      )}
+      {actionError && <div className="mb-4"><ErrorBanner>{actionError}</ErrorBanner></div>}
 
-      <h2 className="mb-3 text-lg font-semibold">Pending pools</h2>
+      <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">
+        Pending pools
+      </h2>
 
-      {poolsError && (
-        <p role="alert" className="rounded bg-red-50 px-3 py-2 text-sm text-red-700">
-          {poolsError}
-        </p>
-      )}
+      {poolsError && <ErrorBanner>{poolsError}</ErrorBanner>}
 
-      {!pools && !poolsError && <p className="text-slate-500">Loading…</p>}
+      {!pools && !poolsError && <ListSkeleton count={2} />}
 
       {pools && pools.length === 0 && (
-        <p className="text-slate-500">No pending requests right now.</p>
+        <EmptyState
+          title="No pending requests"
+          description="New ride requests that match your route will show up here for you to accept."
+        />
       )}
 
       {pools && pools.length > 0 && (
         <ul className="space-y-3">
-          {pools.map((pool) => (
-            <li key={pool.id} className="rounded border border-slate-200 bg-white p-4">
-              <div className="mb-2 flex items-center justify-between">
-                <StatusBadge status={pool.status} />
-                <span className="text-sm text-slate-500">
-                  {pool.seatsOccupied} seat{pool.seatsOccupied === 1 ? "" : "s"} occupied
-                </span>
-              </div>
-              <ul className="mb-3 space-y-1 text-sm">
-                {pool.memberships.map((m) => (
-                  <li key={m.id}>
-                    {m.rideRequest.pickupZone.name} → {m.rideRequest.destinationZone.name} ·{" "}
-                    {formatPaisa(m.rideRequest.estimatedFarePaisa)} (est.)
-                  </li>
-                ))}
-              </ul>
-              <div className="flex gap-3">
-                <button
-                  type="button"
-                  onClick={() => handleAccept(pool.id)}
-                  disabled={acceptingId === pool.id}
-                  className="rounded bg-slate-900 px-4 py-2 text-sm text-white disabled:opacity-50"
-                >
-                  {acceptingId === pool.id ? "Accepting…" : "Accept pool"}
-                </button>
-                <Link
-                  href={`/driver/pools/${pool.id}`}
-                  className="rounded border border-slate-300 px-4 py-2 text-sm hover:bg-slate-100"
-                >
-                  View details
-                </Link>
-              </div>
-            </li>
-          ))}
+          {pools.map((pool) => {
+            const estimatedTotal = pool.memberships.reduce(
+              (sum, m) => sum + m.rideRequest.estimatedFarePaisa,
+              0
+            );
+            return (
+              <li key={pool.id} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <StatusBadge status={pool.status} />
+                  <SeatOccupancy occupied={pool.seatsOccupied} capacity={tesla?.capacity ?? pool.seatsOccupied} />
+                </div>
+                <ul className="mb-3 divide-y divide-slate-100 rounded-lg border border-slate-100">
+                  {pool.memberships.map((m) => (
+                    <li key={m.id} className="flex items-center justify-between px-3 py-2 text-sm">
+                      <span className="text-slate-700">
+                        {m.rideRequest.pickupZone.name} → {m.rideRequest.destinationZone.name}
+                      </span>
+                      <span className="text-slate-500">{formatPaisa(m.rideRequest.estimatedFarePaisa)}</span>
+                    </li>
+                  ))}
+                </ul>
+                <div className="mb-3 flex items-center justify-between text-sm">
+                  <span className="text-slate-500">Estimated total</span>
+                  <span className="font-medium text-slate-900">{formatPaisa(estimatedTotal)}</span>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleAccept(pool.id)}
+                    disabled={acceptingId === pool.id}
+                    className="flex-1 rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {acceptingId === pool.id ? "Accepting…" : "Accept pool"}
+                  </button>
+                  <Link
+                    href={`/driver/pools/${pool.id}`}
+                    className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+                  >
+                    View details
+                  </Link>
+                </div>
+              </li>
+            );
+          })}
         </ul>
       )}
     </main>
@@ -199,16 +206,19 @@ function RegisterTeslaForm({ token, onRegistered }) {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="mb-8 space-y-3 rounded border border-slate-200 bg-white p-4">
+    <form
+      onSubmit={handleSubmit}
+      className="mb-8 space-y-3 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
+    >
       <p className="text-sm text-slate-600">You haven&apos;t registered a Tesla yet.</p>
-      <div className="flex gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row">
         <input
           type="text"
           placeholder="Name (e.g. Bullet)"
           value={name}
           onChange={(e) => setName(e.target.value)}
           required
-          className="flex-1 rounded border border-slate-300 px-3 py-2"
+          className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm transition focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
         />
         <input
           type="number"
@@ -216,21 +226,17 @@ function RegisterTeslaForm({ token, onRegistered }) {
           value={capacity}
           onChange={(e) => setCapacity(e.target.value)}
           required
-          className="w-24 rounded border border-slate-300 px-3 py-2"
+          className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm transition focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 sm:w-24"
         />
         <button
           type="submit"
           disabled={isSubmitting}
-          className="rounded bg-slate-900 px-4 py-2 text-white disabled:opacity-50"
+          className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {isSubmitting ? "Registering…" : "Register"}
         </button>
       </div>
-      {error && (
-        <p role="alert" className="rounded bg-red-50 px-3 py-2 text-sm text-red-700">
-          {error}
-        </p>
-      )}
+      {error && <ErrorBanner>{error}</ErrorBanner>}
     </form>
   );
 }
