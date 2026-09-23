@@ -77,11 +77,27 @@ export default function LoginPage() {
         </p>
       </div>
 
-      <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-600">
-        <p className="mb-1 font-medium text-slate-700">Demo accounts</p>
-        <p>Password for all: <code className="rounded bg-white px-1 py-0.5">password123</code></p>
-        <p className="mt-1">jashim@dhakateslapool.test (driver)</p>
-        <p>nusrat / rafiq / shirin@dhakateslapool.test (passengers)</p>
+      <div className="mt-4 rounded-2xl border-2 border-dashed border-amber-300 bg-amber-50 p-4">
+        <p className="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-amber-800">
+          <span aria-hidden="true">🔑</span> Demo accounts — for evaluators
+        </p>
+        <p className="mb-2 text-xs text-amber-900">
+          Password for every account: <code className="rounded bg-white px-1.5 py-0.5 font-semibold">password123</code>
+        </p>
+        <ul className="space-y-1 text-xs text-amber-900">
+          <li>
+            <code className="rounded bg-white px-1.5 py-0.5">jashim@dhakateslapool.test</code> — driver
+          </li>
+          <li>
+            <code className="rounded bg-white px-1.5 py-0.5">nusrat@dhakateslapool.test</code> — passenger
+          </li>
+          <li>
+            <code className="rounded bg-white px-1.5 py-0.5">rafiq@dhakateslapool.test</code> — passenger
+          </li>
+          <li>
+            <code className="rounded bg-white px-1.5 py-0.5">shirin@dhakateslapool.test</code> — passenger
+          </li>
+        </ul>
       </div>
     </main>
   );
