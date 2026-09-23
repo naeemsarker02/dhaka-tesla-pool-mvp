@@ -903,3 +903,40 @@ confirmed deterministic across 5 consecutive local runs against MariaDB. CI (`do
 **Next task:** Phase 11 — record the 6-minute video, cut `release/v1.0.0` from `pre-release`.
 Deployment is on hold — the project owner will decide the hosting approach (or confirm the
 CI-verified Docker fallback) rather than this session choosing unilaterally.
+
+---
+
+## Phase 10.6 — Raw-brief cross-check (2026-09-23)
+
+**Status:** Complete. Requested by the project owner as a check against the RoBenDevs brief's own
+words (not `MASTER_PLAN.md` reviewed against itself). Full account: `docs/decisions.md` item 27.
+
+**Results:**
+- Section 3 (actor capabilities) — **PASS**, every capability has a real endpoint + real frontend
+  page, verified by reading all 8 page files and grepping their `apiFetch` call sites.
+- Section 5 (fare model) — **PASS**, re-run live (not trusted from history): Nusrat/Rafiq's
+  ৳70.50/৳85.50 reproduced exactly against the real backend + MariaDB. Found and cleaned up
+  accumulated stray test data along the way (a non-seed "Roton Mia"/"Dragoon" driver account left
+  `ONLINE`, intercepting matches ahead of Jashim's `Bullet` — restored to the state found, not
+  deleted, since it isn't this session's data).
+- Section 12 (testing list) — **PASS**, one real gap closed: `cancelRideRequest`'s `ReadCommitted`
+  fix (item 26) had no concurrency test proving it. Added one — two members of the same pool
+  cancelling simultaneously now provably ends with the pool `CANCELLED`, not orphaned. 5/5
+  deterministic runs.
+- Section 16 — secrets: **PASS** (full `git log --all -p` grep, entire history). Giant commit:
+  **PASS** (largest commit is 75% `package-lock.json`). Story cast: **PASS** (no `user1`/`driver1`
+  anywhere real). **"No direct pushes to master" — FAIL, found and reported.** 6 commits went
+  directly onto `master` during the Docker/CI debugging session, 5 of them per the project owner's
+  own explicit "push to origin/master" instruction at the time. Not hidden, not rewritten — logged
+  honestly in `docs/decisions.md` item 27, with the fix going forward being to keep even CI-only
+  work on a feature branch (starting with this session's Part 2 frontend work).
+- Open question (`Pool.status` including `MATCHED`) — **resolved, no rename.** The stale
+  instruction predates `MASTER_PLAN.md`'s own Rev 2 correction and has no live representation
+  anywhere to actually conflict with the shipped, tested, two-enum design.
+
+**Tests passed/failed:** `npm test` → 76/76. `npm run test:integration` → 3/3 (2 existing + 1 new
+cancellation-race test), 5/5 deterministic local runs.
+
+**Documentation updated:** `docs/decisions.md` item 27.
+
+**Next task:** Part 2 of this pass — frontend/dashboard visual and UX polish, on a feature branch.

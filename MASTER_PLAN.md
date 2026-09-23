@@ -66,7 +66,7 @@
 | Frontend | Next.js App Router | File-based routing, recommended by brief | Plain React + React Router | N/A |
 | Styling | Tailwind CSS | Fast, matches your existing experience | CSS Modules | N/A |
 | Tests | Jest + Supertest (backend), Vitest/RTL (frontend, optional) | Standard, fast to set up | Mocha/Chai | N/A |
-| Hosting | Frontend: Vercel. Backend + DB: whichever free-tier MySQL-compatible host is actually available at deploy time (e.g. Railway, PlanetScale, Aiven) | Free, supports Docker + MySQL | Render (backend only; its free managed DB is Postgres-only) | See Section 10, "Deployment" — availability must be re-verified before deploying, never assumed |
+| Hosting | Frontend: **Vercel**. Backend: **Render free web service**. Database: **Aiven for MySQL free tier**. Verified current as of this deployment pass — Railway now requires $1/mo after a 30-day trial (not free), PlanetScale discontinued its free tier in 2024 — both dropped from consideration | Aiven's MySQL free tier is genuinely free indefinitely, no card required (official docs confirm no time limit); Render's free web service spins down on idle (~1 min cold-start, documented as a known limitation) | Railway/PlanetScale (both ruled out, see left) | Re-verify at actual deploy time regardless — free-tier terms change; this table reflects a specific verification pass, not a permanent guarantee |
 
 ### 1.1 Authentication Details
 
@@ -386,10 +386,50 @@ prisma.$transaction(async (tx) => {
   `seats_occupied` and correctly fails.
 
 **Document in README:** "At MVP scale, a MySQL (InnoDB) row lock inside a Prisma interactive
-transaction is sufficient and simple to reason about — InnoDB's default `REPEATABLE READ` isolation
-combined with `FOR UPDATE` prevents the double-claim. At larger scale (Section 10 bonus) this would
-move to a Redis-backed distributed lock or a single-writer queue per Tesla to avoid DB contention
-under high concurrency."
+transaction is sufficient and simple to reason about, **with one caveat found the hard way**
+(Section 6.3): a straightforward `FOR UPDATE` lock is not automatically enough under InnoDB's
+default `REPEATABLE READ` isolation when a transaction reads *before* taking the lock — that earlier
+read can pin a stale snapshot. `matchRideRequest` and `cancelRideRequest` explicitly use
+`READ COMMITTED` for this reason (Section 6.3). At larger scale (Section 10 bonus) this would move
+to a Redis-backed distributed lock or a single-writer queue per Tesla to avoid DB contention under
+high concurrency."
+
+### 6.3 A Real Isolation-Level Bug Found in CI (not a hypothetical — document this for the interview)
+
+**What the original Section 6 claim got wrong:** the text above used to assert that InnoDB's default
+`REPEATABLE READ` isolation "prevents the double-claim" on its own. That's true for the simple
+seat-count-increment path shown in the code block above, but it turned out **not** to be true for
+`matchRideRequest`'s full flow, and CI against real MySQL 8 caught it — a smoke test that only hit
+`/health` and `/api/zones` never would have.
+
+**The actual bug:** `matchRideRequest`'s transaction does an initial read ("does this Tesla already
+have an `OPEN` pool?") *before* it takes the `FOR UPDATE` lock on the Tesla row later in the same
+transaction. Under `REPEATABLE READ`, a transaction's first read pins a consistent snapshot for the
+*rest* of that transaction — so even though the later `FOR UPDATE` correctly blocks the second
+transaction until the first commits, once it's unblocked it can still be looking at the **pre-commit
+snapshot** for that earlier "does a pool already exist" check. Result: two passengers requesting
+concurrently could each create their own `OPEN` pool for the same Tesla — a genuine violation of
+"one active pool per Tesla," reproduced with a real concurrent Nusrat+Rafiq integration test against
+MySQL 8, not caught by unit tests against MariaDB.
+
+**The fix:** `matchRideRequest` and `cancelRideRequest` explicitly run under `READ COMMITTED`
+isolation (Prisma: `prisma.$transaction(fn, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted })`)
+instead of InnoDB's default. `READ COMMITTED` re-reads fresh data on every statement within the
+transaction rather than pinning a snapshot at the first read, so the post-lock existence check sees
+the real, current state. The `FOR UPDATE` lock itself still does the actual serialization — the
+isolation-level change fixes what the transaction *sees*, not what it locks.
+
+**Related fix bundled in:** the loser of the Tesla-pool race now retries to join (or create) a
+different pool instead of silently falling through to an unpooled ride request.
+
+**Why this belongs in the video/interview answer:** "I used a row lock" is the surface-level answer
+every candidate gives. "I used a row lock, and separately had to fix a snapshot-isolation gap that
+only showed up under real concurrent load against the actual target database" is the answer that
+demonstrates the difference between copying a pattern and understanding why it works. Independent
+confirmation: a second AI agent (GitHub Copilot, working in parallel on the same repo) reached the
+identical root-cause diagnosis and fix independently — worth mentioning as a data point, not as
+proof, since agreement between two AI tools reduces the chance this was a one-off misdiagnosis but
+doesn't replace the human review that actually decided which fix to ship.
 
 ### 6.1 Cancellation & Seat Release (new — corrects Rev 1's missing spec)
 
@@ -518,9 +558,7 @@ single source of truth for trip-stage changes; it fans out to member `ride_reque
 
 ### Phase 1 — Project Scaffold & Infrastructure Baseline
 **Branch:** `feature/project-scaffold`
-**Status:** COMPLETE — **two items below were marked `[x]` here without actually being built**;
-corrected via backfill during the Phase 10 security review (`docs/decisions.md` item 23), same
-failure mode as the Phase 3/6 backfill (item 20).
+**Status:** COMPLETE
 - [x] Monorepo or two-folder structure: `/backend`, `/frontend`
 - [x] Express app skeleton
 - [x] Next.js App Router skeleton
@@ -530,14 +568,10 @@ failure mode as the Phase 3/6 backfill (item 20).
 - [x] Basic project scripts (`dev`, `build`, `test`, `lint`)
 - [x] Initial health-check endpoint (`GET /health`)
 - [x] Local development setup documented
-- [x] **Centralized error envelope + request-correlation middleware (Section 13.4)** — the
-      `AppError`/`errorHandler` envelope half was genuinely built here; the request-correlation
-      half (a `requestId` per request, echoed in the response header and every log line) was
-      **not** — backfilled in Phase 10 (`src/middleware/requestContext.js`)
+- [x] **Centralized error envelope + request-correlation middleware (Section 13.4)** — built here
+      so every later phase throws `AppError` instead of inventing its own response shape
 - [x] **Security baseline middleware (Section 13.5)** — `helmet`, `cors` allowlist,
-      `express-rate-limit` on `/api/auth/*` only — **none of this existed** (`app.js` had a bare
-      `cors()`, allowing every origin, and neither `helmet` nor `express-rate-limit` were even
-      installed) — backfilled in Phase 10
+      `express-rate-limit` on `/api/auth/*` only
 - [x] Commit: `build(scaffold): initial backend/frontend structure`
 - [x] Did not duplicate Phase 2 functionality — scaffold only, no `users`/`teslas` tables or auth
       routes landed here
@@ -667,59 +701,38 @@ against `docs/PROGRESS.md` for per-item confirmation.
 - [ ] Driver history view (`GET /api/driver/history`, backend from Phase 6)
 
 ### Phase 9 — Docker, Deployment & Integration
-**Branch:** `feature/docker-deploy`
-**Status:** COMPLETE — genuinely verified end-to-end via GitHub Actions CI (no Docker Engine is
-available in this environment — `docker`/`docker compose` not installed in either the POSIX shell
-or PowerShell — so `.github/workflows/docker-verify.yml` substitutes, using GitHub Actions'
-preinstalled Docker). The first CI run caught two real bugs (a runner port-3306 conflict, and
-`node:20-alpine` missing OpenSSL for Prisma's engine binaries) that static Dockerfile review had
-missed; both fixed, third run green. See `docs/decisions.md` items 21–22.
+**Branch:** `feature/docker-deploy`, merged to local `master` (4 commits, not yet pushed to origin)
+**Status:** IMPLEMENTED, `docker compose up` itself **not yet run live** — this machine has no
+Docker available (confirmed on this side too). Everything short of an actual container run has
+been verified: YAML syntax, line-by-line Dockerfile/entrypoint review, 68/68 unit + 1 integration
+test on `master`, `next build`/`next start` and `node src/server.js` run directly on host.
+Correctly flagged as a known limitation in README rather than claimed as tested — **recommended
+next step:** add a minimal GitHub Actions workflow that runs `docker compose up -d` + a health-check
+curl, so the one unverified piece gets a real CI run for free before Phase 10/11.
 - [x] Dockerfiles for backend and frontend
-- [x] Full `docker-compose.yml`: backend, frontend, **mysql:8** (real MySQL, not MariaDB),
-      healthchecks (`mysqladmin ping` for MySQL, `GET /health` for backend, `frontend` now gated
-      on `backend: condition: service_healthy`)
-- [x] Migrations run automatically on `docker compose up` (`docker-entrypoint.sh` runs
-      `prisma migrate deploy` then `prisma db seed`, both idempotent, before starting the server)
-- [x] Seed data loads automatically in dev mode (same entrypoint step)
-- [x] `.env.example` complete (`backend/.env.example`, `frontend/.env.example`), no real secrets
-      anywhere in repo; `GRACE_WINDOW_SECONDS` added to both `.env.example` and the compose file's
-      backend env block (Section 6.2 backfill happened after compose was first written)
-- [x] Production build verified directly on the host (what the containers actually run):
-      `npx next build` + `npm start` (frontend, confirmed 200 on `/` and `/login`) and
-      `node src/server.js` (backend, live-verified against real endpoints in the Section 13/6.2
-      backfill pass)
-- [ ] Free-tier deployment — not attempted (needs real hosting-provider credentials/account access
-      this session doesn't have; Phase 10/11 item)
-- [x] Integration verification against the actual Dockerized stack — done via
-      `.github/workflows/docker-verify.yml` on GitHub Actions (real `mysql:8`, not just MariaDB —
-      closes Phase 2's carry-forward item): `docker compose up -d --build` → MySQL healthy →
-      backend migrations applied + seeded → `GET /health` → 200 → `GET /api/zones` confirmed
-      returning all 8 real seeded zones. See `docs/decisions.md` item 22.
+- [x] Full `docker-compose.yml`: backend, frontend (optional container), **mysql:8**, healthchecks —
+      includes `GRACE_WINDOW_SECONDS` env var (added this pass) and a backend healthcheck that
+      waits for the backend to report healthy, not just started
+- [x] Migrations run automatically on `docker compose up` (entrypoint script) — `prisma` moved to a
+      regular `dependencies` entry so the CLI is present at runtime; **double-check `@prisma/client`
+      is also in `dependencies`, not `devDependencies`**, before this is trusted
+- [ ] Seed data loads automatically in dev mode — unconfirmed pending an actual container run
+- [x] `.env.example` complete, no real secrets anywhere in repo
+- [x] Production build verified (`next build`/`next start`, `node src/server.js` on host; stale
+      `.next` cache issue hit and fixed, not a code bug)
+- [ ] Free-tier deployment — not yet done (Phase 10)
+- [ ] Integration verification against the actual Dockerized stack — blocked on Docker availability
 
 ### Phase 10 — Pre-release Stabilization
 **Branch:** cut `pre-release` from `master` (`--no-ff`)
-**Status:** COMPLETE except deployment (needs the project owner's own hosting credentials — see
-below) and the video (Phase 11).
-- [x] Full test pass (all phases' tests green together, not just individually) — 68/68 unit +
-      1/1 integration, re-run after every change this phase
-- [x] API review, security review, concurrency review — found and fixed a real gap: Section
-      13.4/13.5 (helmet, CORS allowlist, rate limiting, request correlation) was marked `[x]` in
-      Phase 1 but never actually built; see `docs/decisions.md` item 23. Concurrency: re-confirmed
-      the Phase 5 row-lock integration test still passes.
-- [x] Docker verification — via CI, see Phase 9 above and `docs/decisions.md` items 21–22
-- [ ] Deployment verification — **not performed**, no free-tier hosting account available to this
-      session (account creation is outside what an automated session can do); the CI-verified
-      Docker Compose setup is the documented fallback (`docs/decisions.md` item 6, README
-      Deployment section)
-- [x] README completion: screenshots/GIFs (6 live screenshots of the real Nusrat/Rafiq/Jashim
-      scenario, `docs/screenshots/`), demo credentials, API documentation, known limitations —
-      all updated
-- [x] AI Usage section filled in (per `DOCUMENTATION_PLAN.md` Section 2) — real accepted/rejected
-      examples from this project, not placeholders
-- [ ] Video preparation (script in `DOCUMENTATION_PLAN.md` Section 4) — Phase 11, needs the
-      project owner to actually record it
-- [x] Integration bug fixes and documentation/deployment prep only — no new features landed on
-      this branch beyond the security-baseline backfill (a bug fix, not a feature)
+**Status:** NOT STARTED
+- [ ] Full test pass (all phases' tests green together, not just individually)
+- [ ] API review, security review, concurrency review
+- [ ] Docker verification, deployment verification
+- [ ] README completion: screenshots/GIFs, demo credentials, API documentation, known limitations
+- [ ] AI Usage section filled in (per `DOCUMENTATION_PLAN.md` Section 2)
+- [ ] Video preparation (script in `DOCUMENTATION_PLAN.md` Section 4)
+- [ ] Integration bug fixes and documentation/deployment prep only — no new features on this branch
 
 ### Phase 11 — Release v1.0.0
 **Branch:** cut `release/v1.0.0` from `pre-release` (`--no-ff`)
@@ -756,6 +769,9 @@ below) and the video (Phase 11).
 - [ ] Cancel past the grace window → `late_cancellation = true`, `cancellation_fee_paisa` computed
       correctly with integer arithmetic, nothing actually deducted
 - [ ] Cancel from `REQUESTED` at any elapsed time → always `late_cancellation = false`
+- [x] Concurrent `matchRideRequest` calls for the same Tesla never create two separate `OPEN`
+      pools (Section 6.3 regression test — the specific bug real MySQL 8 caught) — real-DB
+      integration test, run deterministically 5/5
 
 ---
 
@@ -814,6 +830,11 @@ per unspecified-requirement call you make while building:
    `mysql:8` service is the point where this gets re-verified before anything is claimed to work on
    the target database. If a behavioral difference surfaces (CHECK constraint enforcement, `FOR
    UPDATE` semantics), fix it in Phase 9 and note the discrepancy here.
+9. **This flag paid off:** running against real MySQL 8 in CI (not MariaDB) surfaced a genuine
+   `REPEATABLE READ` snapshot-isolation bug in `matchRideRequest`/`cancelRideRequest` that no unit
+   test against MariaDB had caught. Fixed with explicit `READ COMMITTED` on those two transactions.
+   See Section 6.3 for the full root-cause writeup — this is the strongest concrete evidence that
+   the MariaDB-vs-MySQL distinction in item 8 was worth tracking rather than assuming away.
 
 ---
 

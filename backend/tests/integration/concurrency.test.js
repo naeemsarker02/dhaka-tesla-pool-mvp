@@ -8,6 +8,7 @@
 // can run repeatably without disturbing demo data, and cleans up everything it creates.
 const { PrismaClient } = require("@prisma/client");
 const { matchRideRequest } = require("../../src/services/matchingService");
+const { cancelRideRequest } = require("../../src/services/rideService");
 
 const prisma = new PrismaClient();
 
@@ -64,6 +65,9 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  // rideStatusHistory rows (written by cancelRideRequest, exercised by the cancel-race test
+  // below) FK-reference ride_requests — must go first or the deleteMany below is blocked.
+  await prisma.rideStatusHistory.deleteMany({ where: { rideRequestId: { in: rideRequestIds } } });
   await prisma.poolMembership.deleteMany({ where: { rideRequestId: { in: rideRequestIds } } });
   await prisma.pool.deleteMany({ where: { teslaId: tesla.id } });
   await prisma.rideRequest.deleteMany({ where: { id: { in: rideRequestIds } } });
@@ -204,6 +208,69 @@ test("two concurrent first-time requests for the same Tesla: only one pool is ev
     await prisma.pool.deleteMany({ where: { teslaId: raceTesla.id } });
     await prisma.tesla.delete({ where: { id: raceTesla.id } });
     await prisma.user.delete({ where: { id: raceDriver.id } });
+    if (otherIds.length > 0) {
+      await prisma.tesla.updateMany({ where: { id: { in: otherIds } }, data: { status: "ONLINE" } });
+    }
+  }
+}, 20000);
+
+// Regression test for the other half of docs/decisions.md item 26: cancelRideRequest's
+// transaction has the identical plain-read-before-lock structure as matchRideRequest (a plain
+// rideRequest.findUnique first, then a pools row lock, then a plain poolMembership.count read
+// right after it), fixed with the same ReadCommitted isolation level — but until now nothing
+// actually exercised it under real concurrency. Without the fix, two members of the same pool
+// cancelling at nearly the same instant could each see a stale non-zero remaining-member count
+// (missing the other's already-committed membership deletion) and neither would ever cancel the
+// now-actually-empty pool, leaving it orphaned OPEN forever.
+test("two members of the same pool cancelling concurrently: the pool ends up correctly CANCELLED, not orphaned", async () => {
+  const cancelDriver = await prisma.user.create({
+    data: {
+      name: "Integration Test Driver (cancel race)",
+      email: `integration-driver-cancel-${Date.now()}@dhakateslapool.test`,
+      passwordHash: "not-a-real-hash",
+      role: "DRIVER",
+      phone: "01700000096",
+    },
+  });
+  const cancelTesla = await prisma.tesla.create({
+    data: { driverId: cancelDriver.id, name: "Integration Test Car (cancel)", capacity: 3, status: "ONLINE" },
+  });
+  const others = await prisma.tesla.findMany({
+    where: { status: "ONLINE", id: { not: cancelTesla.id } },
+    select: { id: true },
+  });
+  const otherIds = others.map((t) => t.id);
+  if (otherIds.length > 0) {
+    await prisma.tesla.updateMany({ where: { id: { in: otherIds } }, data: { status: "OFFLINE" } });
+  }
+
+  try {
+    const nusrat = await createPassenger("CancelRaceNusrat");
+    const rafiq = await createPassenger("CancelRaceRafiq");
+    const nusratRequest = await createRideRequest(nusrat.id);
+    const rafiqRequest = await createRideRequest(rafiq.id);
+
+    const nusratMatch = await matchRideRequest(nusratRequest, banani, mohakhali);
+    const rafiqMatch = await matchRideRequest(rafiqRequest, banani, mohakhali);
+    expect(nusratMatch.poolId).toBe(rafiqMatch.poolId);
+    const poolId = nusratMatch.poolId;
+
+    const poolBeforeCancel = await prisma.pool.findUnique({ where: { id: poolId } });
+    expect(poolBeforeCancel.seatsOccupied).toBe(2);
+
+    await Promise.all([
+      cancelRideRequest(nusrat.id, nusratRequest.id),
+      cancelRideRequest(rafiq.id, rafiqRequest.id),
+    ]);
+
+    const finalPool = await prisma.pool.findUnique({ where: { id: poolId } });
+    expect(finalPool.status).toBe("CANCELLED");
+    const finalMembershipCount = await prisma.poolMembership.count({ where: { poolId } });
+    expect(finalMembershipCount).toBe(0);
+  } finally {
+    await prisma.pool.deleteMany({ where: { teslaId: cancelTesla.id } });
+    await prisma.tesla.delete({ where: { id: cancelTesla.id } });
+    await prisma.user.delete({ where: { id: cancelDriver.id } });
     if (otherIds.length > 0) {
       await prisma.tesla.updateMany({ where: { id: { in: otherIds } }, data: { status: "ONLINE" } });
     }

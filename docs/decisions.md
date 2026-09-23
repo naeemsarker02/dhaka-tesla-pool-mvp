@@ -608,3 +608,86 @@ because the audit's own new CI step happened to exercise a code path (two simult
 pool-matching requests) that no test, local or CI, had exercised before. It's the clearest evidence
 in this project for why "the code looks right and the tests pass" is not the same claim as "this
 was actually run under the condition it claims to handle."
+
+---
+
+### 27. Full raw-brief cross-check (2026-09-23) — a real git-workflow gap, and one resolved open question
+
+**Context:** the project owner asked for a section-by-section cross-check of the actual code against
+the raw RoBenDevs brief's own words (Sections 3, 5, 12, 16), not `MASTER_PLAN.md` reviewed against
+itself, plus resolution of a standing open question about the `Pool.status` enum.
+
+**Section 3 (actor capabilities):** PASS. Every listed Passenger/Driver/Pool capability maps to a
+real, wired endpoint and a real frontend page calling it — confirmed by reading all 8 frontend
+`page.js` files and grepping each for its `apiFetch` call sites (signup/login route through
+`AuthContext`'s `signup`/`login`, which themselves call `apiFetch`).
+
+**Section 5 (fare model):** PASS, re-verified live rather than trusted from an earlier report — ran
+the exact Nusrat (Banani→Mohakhali)/Rafiq (Banani→Gulshan) scenario fresh against the real running
+backend + MariaDB: `estimatedFarePaisa` 7500/9000 at creation (no discount), `farePaisa` 7050/8550
+after Jashim accepts the pool — an exact match to the brief's own hand-calculable numbers. Along
+the way, found and cleaned up accumulated stray test data (leftover active ride requests, an
+orphaned pool, and a non-seed "Roton Mia"/"Dragoon" driver/Tesla account with `status: ONLINE` that
+was intercepting the seed cast's matches ahead of Jashim's `Bullet`) — restored to the state found
+(that stray Tesla's online status), not deleted, since it isn't this session's data to remove.
+
+**Section 12 (testing list):** PASS, with one gap found and fixed. Bullet's-capacity /
+invalid-transitions / pooled-fares / cross-user-modification / cancellation-rules were all already
+covered by existing tests, unaffected by item 26's isolation-level fix. The **new-pool-race**
+scenario (`tests/integration/concurrency.test.js`'s second test) only started passing *after* that
+fix — before it, the identical test failed exactly as item 26 describes. The **cancellation
+concurrency** scenario, however, had a preventive fix (`cancelRideRequest`'s `ReadCommitted`) with
+**no test at all** proving it under real concurrency — closed that gap this pass: a new integration
+test races two members of the same pool cancelling simultaneously and asserts the pool ends up
+`CANCELLED`, not orphaned with zero real members. Deterministic across 5 consecutive runs.
+
+**Section 16 ("what not to do"):**
+- **No secrets committed:** PASS. `git log --all -p` grepped for AWS-key patterns, `password`/
+  `secret`/`api_key` literal assignments, PEM private-key headers, and DB connection strings with
+  embedded credentials, across the *entire* history (not just current files) — the only matches
+  were `"password123"` (the documented seed/demo password, per the brief's own "demo credentials"
+  requirement) and `"test-secret-do-not-use-in-production"` (a labeled test-only JWT secret). No
+  `.env`, `.pem`, `.key`, or credentials file was ever committed (`git log --all --name-only`
+  grepped for those extensions/filenames, zero matches).
+- **No single giant initial commit:** PASS. The largest commit (`5539e60`,
+  "build(scaffold): initial backend/frontend structure", 24 files/7201 insertions) is 5429 of those
+  insertions from an auto-generated `package-lock.json` — the actual hand-written content is a
+  Phase-1-scoped scaffold (health check, Prisma datasource-only init, Next.js skeleton,
+  docker-compose skeleton), not the finished system.
+- **Story cast consistent:** PASS. Grepped `backend/src`, `backend/tests`, `backend/prisma`,
+  `frontend/app`, `frontend/components`, `frontend/lib`, `README.md`, and `docs/` for
+  `user1`/`driver1`/`John Doe`/`test user`/`foo bar` — every match was in a comment *quoting the
+  rule itself* (e.g. "never generic user1/driver1"), never an actual usage. Seed data
+  (`backend/prisma/seed.js`) consistently uses Jashim/Bullet/Nusrat/Rafiq/Shirin throughout.
+- **"Push all feature development directly to master" — FAIL, found and reported, not hidden.**
+  `git log --oneline c74b5a8..master` and `66ad506..c74b5a8` show 6 commits
+  (`3c2e1f0`, `369c0c4`, `5c49f42`, `4f8e0a7`, `4065ff9`, `8783816`) with a single parent each —
+  committed directly onto `master`, not merged in from a branch. Context, not excuse: 5 of the 6
+  were pushed in direct response to the project owner's own explicit instruction in that turn
+  ("Push the 4 local commits plus the two new ones... to origin/master"), during rapid CI-failure
+  debugging on work that had *already* been merged from `feature/docker-deploy` moments earlier
+  (`66ad506`); the 6th (`8783816`) was a same-fix cherry-pick applied directly to `master` to
+  unbreak CI there after an unrelated external PR merge (`c74b5a8`) had reintroduced a bug that
+  had already been fixed on `pre-release`. Neither justification changes the fact: this deviates
+  from the branch-per-change workflow Section 16/`CLAUDE.md` both require, and it's logged here
+  rather than smoothed over. Not rewriting history to hide it — `master` has already been built on
+  top of since (PRs, further pushes) and rewriting published history is its own, worse violation of
+  this project's own safety rules. Going forward (starting with the Part 2 frontend work in this
+  same session), feature work goes on a `feature/*` branch, full stop, including CI-only fixes.
+
+**Open decision — `Pool.status` including `MATCHED` — resolved, no rename:** an earlier, informal
+instruction (never written into `MASTER_PLAN.md` or `CLAUDE.md` — confirmed by grepping both for
+the phrase and finding no trace) said "MATCHED is a ride status, not a pool status." The shipped
+schema has `PoolStatus` include `MATCHED` (`OPEN → MATCHED → DRIVER_ARRIVED → ...`), which appears
+to conflict. It doesn't, on inspection: the raw brief's own "suggested lifecycle" (`REQUESTED →
+MATCHED/ACCEPTED → DRIVER_ARRIVED → STARTED → COMPLETED`) doesn't distinguish ride vs. pool at all
+— that split is `MASTER_PLAN.md`'s own Rev 2 correction (Section 3.1), which deliberately gives
+`Pool.status` its own `MATCHED` milestone (the driver accepting the pool) distinct from
+`RideRequest.status.MATCHED` (the passenger's own status, which flips *because of* that same
+event). The stale instruction predates that correction and was superseded by it, not left standing
+in conflict with it. **Decision: no rename.** The two-enum design is intentional, documented
+(`docs/erd.md`, Section 3.1/3.2), tested (`stateMachine.js`'s two separate transition tables,
+confirmed unconflated in item 25's audit), and load-bearing across Phases 4-8's merged code — a
+rename now would touch the schema, both services, every route/controller referencing pool status,
+and every test asserting on it, for zero functional benefit, purely to match an instruction that
+no longer has any live representation to conflict with.
