@@ -443,3 +443,35 @@ first 20 and `429` for the 21st; `X-Request-Id` present on every response and ma
 both the error JSON body and the server's own log line for that request. `npm test` — 68/68
 unaffected (no test asserts an exact error-response shape besides `/health`, which this doesn't
 touch).
+
+---
+
+### 24. CI caught a MySQL-container flake: `mysqladmin ping` can pass during the "temporary server" phase (2026-09-23)
+
+**Context:** the project owner opened and merged a PR from `pre-release` into `master` outside this
+session (via the GitHub web UI). That merge commit's own CI run (`docker-verify.yml`) failed — a
+genuinely new failure mode, different from items 21/22's port-3306/OpenSSL bugs, both of which were
+already fixed by that point.
+
+**Root cause, found in the container logs:** `mysql:8`'s official image runs a *temporary* server
+first (to execute init scripts — creating the `dhaka_tesla_pool` database), shuts it down, then
+starts the real, final server. The temporary server does accept connections, so Docker's
+healthcheck (`mysqladmin ping`) can report the container "healthy" during that brief window —
+`docker-compose.yml`'s `depends_on: mysql: condition: service_healthy` only guarantees the *first*
+healthy signal, not that mysql stays reachable afterward. The `backend` container started in that
+gap and its `prisma migrate deploy` failed with `Error: P1001: Can't reach database server at
+'mysql:3306'`, because mysql was mid-restart into its final server at that exact instant.
+
+**Decision:** rather than try to make the healthcheck itself perfectly distinguish "temporary" from
+"final" mysqld (fragile, and MySQL's own image doesn't expose that distinction cleanly),
+`backend/docker-entrypoint.sh` now retries `prisma migrate deploy` in a loop — up to 10 attempts,
+3s apart — before giving up. This is the standard, well-documented fix for this exact MySQL-image
+quirk: self-healing at the application/entrypoint layer, since Compose's dependency-health gating
+alone can't fully guarantee it for this particular image's startup behavior. `prisma db seed` is
+unaffected (it only runs after a successful migration, by which point mysql's final server is
+definitely up).
+
+**Why this is worth recording, not just fixing quietly:** this is now the *third* distinct real bug
+CI has caught that static review or local testing never would have (port 3306, missing OpenSSL,
+and now this) — a repeated, concrete demonstration of why Section 0/Phase 9's Docker requirement
+specifically calls for actually running the stack, not just reading the configuration carefully.
