@@ -28,6 +28,7 @@ services:
       PORT: 4000
       JWT_SECRET: "docker-compose-dev-only-secret-do-not-use-in-production"
       GRACE_WINDOW_SECONDS: 60
+      CORS_ORIGIN: "http://localhost:3000"
     ports:
       - "4000:4000"
     depends_on:

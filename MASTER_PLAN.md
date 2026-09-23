@@ -518,7 +518,9 @@ single source of truth for trip-stage changes; it fans out to member `ride_reque
 
 ### Phase 1 — Project Scaffold & Infrastructure Baseline
 **Branch:** `feature/project-scaffold`
-**Status:** COMPLETE
+**Status:** COMPLETE — **two items below were marked `[x]` here without actually being built**;
+corrected via backfill during the Phase 10 security review (`docs/decisions.md` item 23), same
+failure mode as the Phase 3/6 backfill (item 20).
 - [x] Monorepo or two-folder structure: `/backend`, `/frontend`
 - [x] Express app skeleton
 - [x] Next.js App Router skeleton
@@ -528,10 +530,14 @@ single source of truth for trip-stage changes; it fans out to member `ride_reque
 - [x] Basic project scripts (`dev`, `build`, `test`, `lint`)
 - [x] Initial health-check endpoint (`GET /health`)
 - [x] Local development setup documented
-- [x] **Centralized error envelope + request-correlation middleware (Section 13.4)** — built here
-      so every later phase throws `AppError` instead of inventing its own response shape
+- [x] **Centralized error envelope + request-correlation middleware (Section 13.4)** — the
+      `AppError`/`errorHandler` envelope half was genuinely built here; the request-correlation
+      half (a `requestId` per request, echoed in the response header and every log line) was
+      **not** — backfilled in Phase 10 (`src/middleware/requestContext.js`)
 - [x] **Security baseline middleware (Section 13.5)** — `helmet`, `cors` allowlist,
-      `express-rate-limit` on `/api/auth/*` only
+      `express-rate-limit` on `/api/auth/*` only — **none of this existed** (`app.js` had a bare
+      `cors()`, allowing every origin, and neither `helmet` nor `express-rate-limit` were even
+      installed) — backfilled in Phase 10
 - [x] Commit: `build(scaffold): initial backend/frontend structure`
 - [x] Did not duplicate Phase 2 functionality — scaffold only, no `users`/`teslas` tables or auth
       routes landed here

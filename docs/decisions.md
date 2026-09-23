@@ -395,3 +395,51 @@ just MariaDB — is exercised this way too, closing the Phase 2 carry-forward it
 to `docker-compose.yml`, either Dockerfile, or `docker-entrypoint.sh` are verified by pushing and
 checking `.github/workflows/docker-verify.yml`'s run, the same way `npm test` verifies backend
 logic changes.
+
+---
+
+### 23. Phase 10 security review found Section 13.4/13.5 were never actually built (2026-09-23)
+
+**Context:** during Phase 10's mandated "API review, security review, concurrency review", a
+line-by-line read of `src/app.js` against `MASTER_PLAN.md` Section 13.4/13.5 — both explicitly
+marked `[x]` complete in Phase 1's checklist — found neither was real:
+
+- **Section 13.5 (security baseline):** `app.js` had a bare `cors()` (no options — allows every
+  origin, `*`, the exact thing the plan says not to do), and `helmet`/`express-rate-limit` weren't
+  even in `package.json`. No security headers, no rate limiting on `/api/auth/*` at all.
+- **Section 13.4 (request correlation):** only the `AppError`/`errorHandler` envelope half existed.
+  There was no `requestId` anywhere in the codebase — no per-request UUID, no `X-Request-Id`
+  response header, and no request logging of any kind (not even a bare `console.log` per request),
+  despite the plan's explicit point: *"this is what 'logging' in the brief actually wants
+  demonstrated: that you can trace one request's story through the logs."*
+
+This is the same failure mode as item 20 (Section 13.1/13.2/13.6/6.2) and item 21/22's Docker gap —
+a plan checkbox marked done that the code never actually did. Logged the same way: fixed, not
+silently patched.
+
+**Decision — implemented exactly per Section 13.4/13.5's spec:**
+- `npm install helmet express-rate-limit` (both regular dependencies).
+- `src/middleware/authRateLimit.js` — `express-rate-limit`, 20 requests per 15-minute window,
+  mounted only on `/api/auth` (`app.use("/api/auth", authRateLimiter, authRoutes)`), matching
+  existing error-envelope shape (`{ error: "..." }`) rather than introducing Section 13.4's example
+  `{ error: { code, message } }` shape — changing the whole app's error envelope shape is a much
+  larger, unrelated refactor than a security-baseline fix warrants, and no test or client code
+  anywhere in this repo expects the nested-object shape.
+- `app.js`: `app.use(helmet())`, and `cors({ origin: corsOrigins })` where `corsOrigins` is parsed
+  from a new `CORS_ORIGIN` env var (comma-separated, defaults to `http://localhost:3000`) — added
+  to both `.env.example` and `docker-compose.yml`'s backend env block.
+- `src/middleware/requestContext.js` — `requestContext` assigns `req.id = crypto.randomUUID()` and
+  sets it as the `X-Request-Id` response header; `requestLogger` logs
+  `[requestId] METHOD path -> status (Nms)` on `res.on("finish")`, silenced under `NODE_ENV=test`
+  to keep Jest output clean (the header/body still carry the id either way, so nothing about
+  traceability is lost by the test-only silence). `errorHandler` now includes `requestId` in every
+  error JSON body and prefixes its `console.error` line with it.
+
+**Verified live** (real server, not mocked): `helmet` headers present (`X-Content-Type-Options`,
+`X-Frame-Options`, `Strict-Transport-Security`, etc.) on `GET /health`; CORS echoes
+`Access-Control-Allow-Origin` for `http://localhost:3000` and omits it entirely for a disallowed
+`http://evil.example.com` origin; 21 rapid `POST /api/auth/login` attempts return `401` for the
+first 20 and `429` for the 21st; `X-Request-Id` present on every response and matches the id in
+both the error JSON body and the server's own log line for that request. `npm test` — 68/68
+unaffected (no test asserts an exact error-response shape besides `/health`, which this doesn't
+touch).
