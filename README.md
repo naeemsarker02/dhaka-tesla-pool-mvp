@@ -66,9 +66,17 @@ statuses bleed into each other is the actual engineering problem this MVP solves
 
 ## Screenshots / GIFs
 
-Not yet captured as static images — the passenger flow (signup/login, request a ride, track
-status, cancel, ride history) has been verified live in a browser (`docs/PROGRESS.md` Phase 7);
-screenshots/GIFs will be added during the documentation pass before submission (Phase 10).
+Captured live against the real running app (real backend, real MariaDB, not mocked) during the
+Phase 10 documentation pass — the exact Nusrat+Rafiq+Jashim scenario from `MASTER_PLAN.md` §5.2.
+
+| | |
+|---|---|
+| **Login** — demo credentials shown for all four cast members | **Request a ride** — Nusrat, Banani → Mohakhali |
+| ![Login](./docs/screenshots/01-login.jpg) | ![Request a ride](./docs/screenshots/02-request-ride.jpg) |
+| **Ride status** — `REQUESTED`, estimated fare ৳75.00 (matches §5.2 exactly) | **Driver console** — Jashim sees the pending pool, both passengers' est. fares |
+| ![Ride status](./docs/screenshots/03-ride-status-requested.jpg) | ![Driver pending pool](./docs/screenshots/04-driver-pending-pool.jpg) |
+| **Pool accepted** — `MATCHED`, finalized fares ৳70.50 / ৳85.50, exact digit-for-digit match to §5.2 | **Ride history** — Nusrat's ride `COMPLETED` at the same ৳70.50 |
+| ![Pool matched, fares finalized](./docs/screenshots/05-pool-matched-fares.jpg) | ![Ride history completed](./docs/screenshots/06-ride-history-completed.jpg) |
 
 ## Architecture
 
