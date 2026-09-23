@@ -304,7 +304,18 @@ Section 6; cancellation/seat-release flow: Section 6.1.
 
 ## Deployment
 
-Not yet deployed — Phase 10/11.
+**Not publicly deployed.** `MASTER_PLAN.md` Section 1's hosting row names Railway/PlanetScale/
+Aiven (backend+DB) and Vercel (frontend) as candidates, contingent on "whichever free-tier
+MySQL-compatible host is actually available at deploy time" (`docs/decisions.md` item 6) — that
+availability check requires creating an account on one of these providers, which this automated
+session cannot do (account creation is outside what it's permitted to perform on the project
+owner's behalf). Per the same item's own fallback: **the Docker Compose setup is the documented,
+reproducible deployment story**, and unlike a from-scratch local `docker compose up`, it's
+genuinely CI-verified end-to-end (`.github/workflows/docker-verify.yml`, `docs/decisions.md`
+item 22) — the same command that would run on a real host has already been proven to bring up a
+healthy stack with migrations and seed data applied automatically. Picking an actual provider,
+creating the account, and deploying is the next concrete step before submission, needs the
+project owner's own credentials.
 
 ## API Overview
 
@@ -410,6 +421,18 @@ OpenSSL, which broke Prisma's schema-engine binary inside the `backend` containe
 (`Could not parse schema engine response... is not valid JSON` — Prisma's own error text said
 exactly what to install). Both fixed and confirmed by a fully green CI run, including a real
 `GET /api/zones` response with all 8 seeded zones. See `docs/decisions.md` item 22.
+
+**Same day — Phase 10 security review:** the mandated "security review" pass wasn't treated as a
+formality — re-read `src/app.js` against `MASTER_PLAN.md` Section 13.4/13.5 line by line instead of
+trusting Phase 1's `[x]` marks. Found neither was real: `cors()` had no options (allows every
+origin), `helmet`/`express-rate-limit` weren't installed, and there was no request-correlation
+(`requestId`) anywhere — no `X-Request-Id` header, no request logging at all, despite the plan's
+explicit "this is what 'logging' actually wants demonstrated." Backfilled all of it and verified
+live rather than just by reading the diff: curled `/health` for security headers, sent a
+disallowed-origin request and confirmed CORS silently omitted `Access-Control-Allow-Origin`, sent
+21 rapid login attempts and confirmed the 21st got `429`, and confirmed the same `requestId`
+appears in the response header, the error JSON body, and the server's own log line. See
+`docs/decisions.md` item 23.
 
 ## Demo Video
 

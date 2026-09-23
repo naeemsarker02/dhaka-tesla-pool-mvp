@@ -793,3 +793,54 @@ this section accordingly.
 **Next task:** Phase 10 — pre-release stabilization (full test pass together, docs review,
 screenshots, then cut `pre-release`). Phase 11 (6-minute video + `release/v1.0.0`) needs the
 project owner's own recording — out of scope for an automated session.
+
+---
+
+## Phase 10 — `pre-release` (cut from `master` at `4f8e0a7`)
+
+**Status:** Complete except deployment (needs real hosting credentials) and the video (Phase 11,
+needs the project owner).
+
+**What was implemented:**
+- **Full test pass:** `npm test` 68/68, `npm run test:integration` 1/1, re-run after every change
+  this phase to confirm nothing regressed.
+- **Security review found a real gap, same failure mode as the Phase 3/6/9 backfills:**
+  `MASTER_PLAN.md` Section 13.4 (request correlation)/13.5 (security baseline) were marked `[x]`
+  in Phase 1's checklist but neither was actually built. `app.js` had a bare `cors()` (allows every
+  origin), `helmet`/`express-rate-limit` weren't even installed, and there was no `requestId`
+  anywhere in the codebase — no `X-Request-Id` header, no request logging at all. Fixed:
+  `src/middleware/authRateLimit.js` (20 req/15min on `/api/auth/*` only),
+  `src/middleware/requestContext.js` (`crypto.randomUUID()` per request, `X-Request-Id` header,
+  logged on every request/error), `helmet()` + `cors({ origin: corsOrigins })` with a new
+  `CORS_ORIGIN` env var. Verified live: security headers present, CORS correctly rejects a
+  disallowed origin, the 21st rapid login attempt returns 429, `X-Request-Id` matches across the
+  response header, error body, and server log line. Full account: `docs/decisions.md` item 23.
+- **Screenshots:** 6 live screenshots captured against the real running app (real backend, real
+  MariaDB — not staged) walking through the exact Nusrat/Rafiq/Jashim §5.2 scenario: login,
+  request-ride form, ride status (`REQUESTED`, est. fare ৳75.00), driver console (pending pool with
+  both passengers' est. fares), accepted pool (`MATCHED`, finalized fares ৳70.50/৳85.50 — exact
+  digit match to §5.2), and ride history (`COMPLETED` at the same ৳70.50). Test data cleaned up
+  afterward (ride requests, pool, memberships, status history deleted directly via Prisma — cancel
+  can't remove a `COMPLETED` ride, so this was a direct DB cleanup, not an API call) to restore the
+  clean seed state.
+- **README pass:** Deployment section rewritten to honestly state why no public deployment exists
+  (creating a hosting-provider account is outside what this session can do) and point at the
+  CI-verified Docker Compose setup as the documented fallback, per `docs/decisions.md` item 6's own
+  original wording.
+- `pre-release` branch cut from `master` at `4f8e0a7`, pushed to `origin/pre-release`.
+
+**Files changed:** `backend/src/app.js`, `backend/src/middleware/{authRateLimit,requestContext}.js`
+(new), `backend/src/middleware/errorHandler.js`, `backend/.env.example`, `backend/package.json`,
+`docker-compose.yml`, `README.md`, `docs/screenshots/*.jpg` (new), `docs/decisions.md` (item 23),
+`MASTER_PLAN.md` (Phase 1/10 status corrections).
+
+**Tests passed/failed:** `npm test` → 68/68. `npm run test:integration` → 1/1. CI
+(`docker-verify.yml`) → green on the `pre-release` branch after the security-middleware push.
+
+**Known issues / unresolved:**
+- No public deployment — needs the project owner's own free-tier hosting account (Railway/
+  PlanetScale/Aiven + Vercel, per `MASTER_PLAN.md` §1), which this session cannot create.
+- Video (Phase 11) needs the project owner to record it.
+
+**Next task:** Phase 11 — record the 6-minute video, cut `release/v1.0.0` from `pre-release`, final
+polish. Needs the project owner.

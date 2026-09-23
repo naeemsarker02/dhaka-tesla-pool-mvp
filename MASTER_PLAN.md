@@ -698,14 +698,28 @@ missed; both fixed, third run green. See `docs/decisions.md` items 21–22.
 
 ### Phase 10 — Pre-release Stabilization
 **Branch:** cut `pre-release` from `master` (`--no-ff`)
-**Status:** NOT STARTED
-- [ ] Full test pass (all phases' tests green together, not just individually)
-- [ ] API review, security review, concurrency review
-- [ ] Docker verification, deployment verification
-- [ ] README completion: screenshots/GIFs, demo credentials, API documentation, known limitations
-- [ ] AI Usage section filled in (per `DOCUMENTATION_PLAN.md` Section 2)
-- [ ] Video preparation (script in `DOCUMENTATION_PLAN.md` Section 4)
-- [ ] Integration bug fixes and documentation/deployment prep only — no new features on this branch
+**Status:** COMPLETE except deployment (needs the project owner's own hosting credentials — see
+below) and the video (Phase 11).
+- [x] Full test pass (all phases' tests green together, not just individually) — 68/68 unit +
+      1/1 integration, re-run after every change this phase
+- [x] API review, security review, concurrency review — found and fixed a real gap: Section
+      13.4/13.5 (helmet, CORS allowlist, rate limiting, request correlation) was marked `[x]` in
+      Phase 1 but never actually built; see `docs/decisions.md` item 23. Concurrency: re-confirmed
+      the Phase 5 row-lock integration test still passes.
+- [x] Docker verification — via CI, see Phase 9 above and `docs/decisions.md` items 21–22
+- [ ] Deployment verification — **not performed**, no free-tier hosting account available to this
+      session (account creation is outside what an automated session can do); the CI-verified
+      Docker Compose setup is the documented fallback (`docs/decisions.md` item 6, README
+      Deployment section)
+- [x] README completion: screenshots/GIFs (6 live screenshots of the real Nusrat/Rafiq/Jashim
+      scenario, `docs/screenshots/`), demo credentials, API documentation, known limitations —
+      all updated
+- [x] AI Usage section filled in (per `DOCUMENTATION_PLAN.md` Section 2) — real accepted/rejected
+      examples from this project, not placeholders
+- [ ] Video preparation (script in `DOCUMENTATION_PLAN.md` Section 4) — Phase 11, needs the
+      project owner to actually record it
+- [x] Integration bug fixes and documentation/deployment prep only — no new features landed on
+      this branch beyond the security-baseline backfill (a bug fix, not a feature)
 
 ### Phase 11 — Release v1.0.0
 **Branch:** cut `release/v1.0.0` from `pre-release` (`--no-ff`)
