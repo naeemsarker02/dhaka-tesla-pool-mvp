@@ -17,6 +17,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Free port 3306 (ubuntu-latest ships with a system MySQL already listening on it)
+        run: sudo systemctl stop mysql.service || true
+
       - name: Build and start the full stack
         run: docker compose up -d --build
 
