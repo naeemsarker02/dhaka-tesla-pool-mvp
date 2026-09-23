@@ -844,3 +844,49 @@ needs the project owner).
 
 **Next task:** Phase 11 — record the 6-minute video, cut `release/v1.0.0` from `pre-release`, final
 polish. Needs the project owner.
+
+---
+
+## Phase 10.5 — Full Section 13/6.2 re-audit (2026-09-23)
+
+**Status:** Complete. Triggered by the project owner after three separate "marked complete, not
+actually built" misses (Phase 3's Section 13.1/13.2/13.6, Phase 6's Section 6.2, Phase 1's Section
+13.4/13.5) — a request to re-verify every remaining Section 13/6.2 item by reading the actual code,
+not trusting the checklist, plus a bonus finding: after this write-up was committed, CI on `master`
+(after the project owner's own PR merge) caught a fourth real bug — see the `docker-entrypoint.sh`
+retry-loop fix (commit `19d55ec`/`8783816`, `docs/decisions.md` item 24) — a MySQL-container
+temp-server-restart race that only a live `docker compose up` run could have caught.
+
+**Audit results — pass/fail per item, with what was actually checked:**
+
+| Item | Result | What was checked |
+|---|---|---|
+| 13.1 Idempotency-Key dedup | **PASS** | `rideService.createRideRequest` — up-front lookup by `(passengerId, idempotencyKey)`, plus a `P2002`-race fallback. Read in full. |
+| 13.2 One active ride per passenger | **PASS** | Same file — `ACTIVE_RIDE_STATUSES` check before zone validation. Read in full. |
+| 13.3 Stale-pool policy documented | **PASS** | `README.md` Known Limitations states it explicitly as a deliberate non-implementation. Grepped. |
+| 13.4 Centralized error envelope + request correlation | **PASS** | `src/app.js` — `requestContext`/`requestLogger` are app-level (not per-router); all 5 controller files / 15 route handlers use `try/catch -> next(err)`; `validateBody` and auth middleware both go through `next(new AppError(...))`. Read every controller file and both middleware files in full. **Gap found:** no regression test existed — fixed, see below. |
+| 13.5 Security baseline (helmet/CORS/rate-limit) | **PASS** | Same read as above — `helmet()`/`cors()` are global; `authRateLimiter` is scoped to `/api/auth` only (correct, not "forgotten" — it's intentionally auth-only per the plan). **Gap found:** no regression test existed — fixed, see below. |
+| 13.6 `seatsRequested` bounds 1..3 | **PASS** | `src/validators/ride.js` — `.min(1).max(3)`. Read in full. |
+| 6.2 Grace-window cancellation | **PASS** | `rideService.cancelRideRequest` — `lateCancellation`/`cancellationFeePaisa` computed from `rideRequest.matchedAt` vs `GRACE_WINDOW_SECONDS`. Read in full. |
+| Two separate, unconflated state machines | **PASS** | `prisma/schema.prisma` — `RideRequestStatus`/`PoolStatus` are separate enums; `src/lib/stateMachine.js` — `RIDE_REQUEST_TRANSITIONS`/`POOL_TRANSITIONS` are separate tables, used independently. Read both files. |
+| No `pool_id` column on `ride_requests` | **PASS** | `prisma/schema.prisma` — `RideRequest` model has no such field; `PoolMembership.rideRequestId` is the sole, `@unique` link. Read in full. |
+| Tesla `driver_id` UNIQUE | **PASS** | `prisma/schema.prisma` — `@unique`; `teslaService.registerTesla` also pre-checks and catches `P2002`. Read in full. |
+| MariaDB-vs-MySQL-8 (raw SQL) | **PASS** | Grepped every `$queryRaw`/`$executeRaw` call site and all 5 migration files — no MariaDB-specific syntax anywhere (standard `SELECT ... FOR UPDATE`/`UPDATE ... SET`, standard DDL). |
+| MariaDB-vs-MySQL-8 (concurrency path exercised in CI) | **GAP FOUND, FIXED** | `docker-verify.yml`'s smoke test only ever called `GET /health`/`GET /api/zones` — the row-locked seat-claim path had never run against real MySQL 8 in CI, only against MariaDB locally (`npm run test:integration`). Extended the workflow with a step that pools Nusrat+Rafiq concurrently against the live containerized stack and asserts `seatsOccupied: 2`. |
+
+**What was fixed this pass:**
+- `backend/tests/security.test.js` (new, 7 cases) — regression coverage for the Section 13.4/13.5
+  backfill that previously had none: helmet headers, CORS allowlist (both allowed and disallowed
+  origins), `X-Request-Id` presence/matching/uniqueness, and the auth-only 429 rate limit.
+- `.github/workflows/docker-verify.yml` — new step exercising the `SELECT ... FOR UPDATE` pooling
+  path against real MySQL 8 (previously only reads were exercised).
+- `docs/decisions.md` item 25 — full account of the audit and why the gaps existed.
+
+**Tests passed/failed:** `npm test` → 75/75 (68 + 7 new). CI (`docker-verify.yml`) → to be
+confirmed green on this push, including the new concurrency-path step.
+
+**Known issues / unresolved:** none found beyond the two gaps above, both fixed.
+
+**Next task:** Phase 11 — record the 6-minute video, cut `release/v1.0.0` from `pre-release`.
+Deployment is on hold — the project owner will decide the hosting approach (or confirm the
+CI-verified Docker fallback) rather than this session choosing unilaterally.

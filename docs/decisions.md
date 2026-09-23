@@ -475,3 +475,68 @@ definitely up).
 CI has caught that static review or local testing never would have (port 3306, missing OpenSSL,
 and now this) — a repeated, concrete demonstration of why Section 0/Phase 9's Docker requirement
 specifically calls for actually running the stack, not just reading the configuration carefully.
+
+---
+
+### 25. Full Section 13/6.2 re-audit, prompted by three prior misses (2026-09-23)
+
+**Context:** after items 20 (Section 13.1/13.2/13.6/6.2) and 23 (Section 13.4/13.5) each turned up
+a real "marked done, not actually built" gap, the project owner asked for a full item-by-item
+re-audit of every Section 13/6.2 requirement — not just the ones already caught — plus a
+re-verification of the core invariants (two state machines, no `pool_id`, Tesla ownership) and the
+MariaDB-vs-MySQL-8 question, on the reasoning that three misses in a row means the remaining
+"complete" items shouldn't be trusted just because they're marked that way.
+
+**What the audit actually did (grep + read the real code, not the checklist):**
+- Read `src/services/rideService.js` in full: confirmed 13.1 (idempotency-key dedup, including the
+  `P2002` race-recovery path), 13.2 (one-active-ride check, `ACTIVE_RIDE_STATUSES`), and 6.2
+  (grace-window `lateCancellation`/`cancellationFeePaisa` computation) are all genuinely present,
+  matching the item 20 backfill exactly.
+- Read `src/validators/ride.js`: confirmed 13.6 (`seatsRequested` bounded `.min(1).max(3)`).
+- Grepped `README.md`: confirmed 13.3 (stale-pool policy) is documented under Known Limitations as
+  a deliberate non-implementation, per the plan's own "documented, not auto-implemented" wording —
+  not silently missing.
+- Read `src/app.js` and all 5 controller files (15 route handlers total): confirmed 13.4's
+  `requestContext`/`requestLogger`/`errorHandler` and 13.5's `helmet`/`cors`/`authRateLimiter` are
+  registered as app-level middleware (not scoped to one router) and that every single controller
+  function uses the `try/catch -> next(err)` pattern, so no route can bypass the centralized
+  envelope. `validateBody` and the auth middleware were also checked — both go through
+  `next(new AppError(...))`, never a bare `throw` that would skip Express's error pipeline.
+- Read `prisma/schema.prisma`: confirmed `RideRequestStatus` and `PoolStatus` remain two separate
+  enums used by two separate transition tables (`src/lib/stateMachine.js`), `RideRequest` has no
+  `pool_id`/`poolId` field, and `Tesla.driverId` is still `@unique` (also enforced app-level in
+  `teslaService.registerTesla`, with a `P2002` catch as a second line of defense).
+- Grepped all 5 migration files and every `$queryRaw`/`$executeRaw` call site: nothing
+  MariaDB-specific found (standard `SELECT ... FOR UPDATE` / `UPDATE ... SET`, works identically on
+  both). But re-reading `docker-verify.yml` found the CI smoke test only ever exercised `GET
+  /health` and `GET /api/zones` — **the concurrency-critical `FOR UPDATE` row-lock path had never
+  actually run against real MySQL 8 in CI**, only against MariaDB locally
+  (`npm run test:integration`). This was the one place the audit's "re-verify against CI logs"
+  instruction actually found something not yet true.
+
+**What was found missing and fixed:**
+1. **No regression tests for the Section 13.4/13.5 backfill (item 23).** It had been verified live
+   with curl in that session, but nothing locked it in — a future change could silently break
+   `helmet`/CORS/rate-limiting/request-correlation with no test catching it. Added
+   `backend/tests/security.test.js` (7 cases: helmet headers present, CORS allows the configured
+   origin and omits the header for a disallowed one, `X-Request-Id` present and matching between
+   the header/error-body/a second concurrent request, and the auth rate limiter's 429 on the 21st
+   `/api/auth/login` attempt while other routes stay unaffected).
+2. **CI never exercised the row-locked seat-claim path against real MySQL 8.** Extended
+   `docker-verify.yml` with a step that logs in as Nusrat and Rafiq (seeded accounts), fires both
+   ride requests concurrently at real `mysql:8`, and asserts they land in one pool with
+   `seatsOccupied: 2` — the exact §5.2 scenario, which only passes if `SELECT ... FOR UPDATE`
+   actually serializes correctly against MySQL 8, not just MariaDB.
+
+**Why the earlier passes didn't catch these:** the item 20/23 backfills were each verified by
+manual curl/browser checks in the moment, which proves the code works *right then* but leaves
+nothing that fails later if the code regresses — exactly the gap a "was it actually tested"
+question is supposed to catch, and exactly why this re-audit was worth doing rather than trusting
+the checkmarks. The MySQL-8-vs-MariaDB CI gap existed because `docker-verify.yml`'s original scope
+(Phase 9, item 21/22) was "does the stack come up healthy," never explicitly "does the
+capacity-locking code path work here too" — a scope gap in the original smoke test, not an error
+in it.
+
+**Confirmed present, no changes needed (see PROGRESS.md for the full checklist):** 13.1, 13.2,
+13.3, 13.6, 6.2 (all genuinely implemented, matching item 20); the two separate state machines; no
+`pool_id` column; Tesla `driver_id` uniqueness.
