@@ -19,6 +19,7 @@ jest.mock("../src/lib/prisma", () => {
       rideRequest: {
         create: jest.fn(),
         findUnique: jest.fn(),
+        findFirst: jest.fn().mockResolvedValue(null),
         findMany: jest.fn(),
       },
       $transaction: jest.fn((callback) => callback(tx)),
@@ -118,6 +119,101 @@ describe("POST /api/rides — validation and fare calculation", () => {
     expect(prisma.rideRequest.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ passengerId: "nusrat-id", estimatedFarePaisa: 7500 }),
+      })
+    );
+  });
+
+  it("rejects seatsRequested above 3 (Section 13.6)", async () => {
+    const app = createApp();
+    const res = await request(app)
+      .post("/api/rides")
+      .set("Authorization", `Bearer ${passengerToken}`)
+      .send({ pickupZoneId: BANANI.id, destinationZoneId: MOHAKHALI.id, seatsRequested: 4 });
+
+    expect(res.status).toBe(400);
+    expect(prisma.zone.findUnique).not.toHaveBeenCalled();
+  });
+
+  it("rejects seatsRequested below 1 (Section 13.6)", async () => {
+    const app = createApp();
+    const res = await request(app)
+      .post("/api/rides")
+      .set("Authorization", `Bearer ${passengerToken}`)
+      .send({ pickupZoneId: BANANI.id, destinationZoneId: MOHAKHALI.id, seatsRequested: 0 });
+
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("POST /api/rides — one active ride request per passenger (Section 13.2)", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    prisma.rideRequest.findFirst.mockReset();
+  });
+
+  it("rejects a second active ride request with 409", async () => {
+    // No Idempotency-Key header sent, so the only findFirst call is the active-ride check.
+    prisma.rideRequest.findFirst.mockResolvedValueOnce({ id: "existing-ride", status: "MATCHED" });
+    prisma.zone.findUnique.mockImplementation(({ where }) =>
+      where.id === BANANI.id ? Promise.resolve(BANANI) : Promise.resolve(MOHAKHALI)
+    );
+
+    const app = createApp();
+    const res = await request(app)
+      .post("/api/rides")
+      .set("Authorization", `Bearer ${passengerToken}`)
+      .send({ pickupZoneId: BANANI.id, destinationZoneId: MOHAKHALI.id, seatsRequested: 1 });
+
+    expect(res.status).toBe(409);
+    expect(prisma.rideRequest.create).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/rides — Idempotency-Key (Section 13.1)", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    prisma.rideRequest.findFirst.mockReset();
+  });
+
+  it("returns the original ride request on a repeat Idempotency-Key, does not create a duplicate", async () => {
+    const original = { id: "ride-1", status: "REQUESTED", idempotencyKey: "key-123" };
+    // Only the idempotency lookup runs — a match short-circuits before the active-ride check.
+    prisma.rideRequest.findFirst.mockResolvedValueOnce(original);
+
+    const app = createApp();
+    const res = await request(app)
+      .post("/api/rides")
+      .set("Authorization", `Bearer ${passengerToken}`)
+      .set("Idempotency-Key", "key-123")
+      .send({ pickupZoneId: BANANI.id, destinationZoneId: MOHAKHALI.id, seatsRequested: 1 });
+
+    expect(res.status).toBe(201);
+    expect(res.body.id).toBe("ride-1");
+    expect(prisma.rideRequest.create).not.toHaveBeenCalled();
+    expect(prisma.zone.findUnique).not.toHaveBeenCalled();
+  });
+
+  it("creates a new ride request and stores the key when no prior match exists", async () => {
+    // idempotency lookup (null) then active-ride check (null) — two calls in that order.
+    prisma.rideRequest.findFirst.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+    prisma.zone.findUnique.mockImplementation(({ where }) =>
+      where.id === BANANI.id ? Promise.resolve(BANANI) : Promise.resolve(MOHAKHALI)
+    );
+    prisma.rideRequest.create.mockImplementation(({ data }) =>
+      Promise.resolve({ id: "ride-2", status: "REQUESTED", farePaisa: null, ...data })
+    );
+
+    const app = createApp();
+    const res = await request(app)
+      .post("/api/rides")
+      .set("Authorization", `Bearer ${passengerToken}`)
+      .set("Idempotency-Key", "key-456")
+      .send({ pickupZoneId: BANANI.id, destinationZoneId: MOHAKHALI.id, seatsRequested: 1 });
+
+    expect(res.status).toBe(201);
+    expect(prisma.rideRequest.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ idempotencyKey: "key-456" }),
       })
     );
   });

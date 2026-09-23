@@ -2,7 +2,8 @@ const rideService = require("../services/rideService");
 
 async function create(req, res, next) {
   try {
-    const rideRequest = await rideService.createRideRequest(req.user.id, req.body);
+    const idempotencyKey = req.get("Idempotency-Key") || undefined;
+    const rideRequest = await rideService.createRideRequest(req.user.id, req.body, idempotencyKey);
     res.status(201).json(rideRequest);
   } catch (err) {
     next(err);
