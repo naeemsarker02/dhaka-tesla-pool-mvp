@@ -14,9 +14,11 @@ export function StatusStepper({ status }) {
   }
 
   const currentIndex = LIFECYCLE_STEPS.indexOf(status);
+  const currentLabel = statusStyle(status).label;
 
   return (
-    <ol className="flex items-center" aria-label="Trip progress">
+    <div>
+      <ol className="flex items-center" aria-label="Trip progress">
       {LIFECYCLE_STEPS.map((step, index) => {
         const isComplete = currentIndex >= 0 && index < currentIndex;
         const isCurrent = index === currentIndex;
@@ -56,6 +58,13 @@ export function StatusStepper({ status }) {
           </li>
         );
       })}
-    </ol>
+      </ol>
+      {/* Per-step labels are hidden below sm (5 labels don't fit a phone width) — this single
+          current-step caption is the mobile replacement, so a phone user isn't left with only
+          bare numbered circles and no indication of what step 2 of 5 actually means. */}
+      <p className="mt-2 text-center text-xs font-medium text-slate-600 sm:hidden">
+        Step {currentIndex + 1} of {LIFECYCLE_STEPS.length}: {currentLabel}
+      </p>
+    </div>
   );
 }
