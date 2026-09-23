@@ -13,6 +13,12 @@ import { useAuth } from "../../lib/AuthContext";
 import { apiFetch, ApiError } from "../../lib/api";
 import { formatPaisa } from "../../lib/format";
 
+// Pool statuses where the driver is actively mid-trip on a pool they've already accepted — not
+// pending (OPEN, still in "Pending pools" below) and not finished (COMPLETED/CANCELLED, which
+// belongs in history). One-active-pool-per-Tesla is an existing backend invariant, so at most one
+// pool ever matches this on the frontend too.
+const ACTIVE_POOL_STATUSES = ["MATCHED", "DRIVER_ARRIVED", "STARTED"];
+
 export default function DriverDashboardPage() {
   return (
     <RequireAuth role="DRIVER">
@@ -29,6 +35,7 @@ function DriverDashboard() {
   const [teslaError, setTeslaError] = useState(null);
   const [pools, setPools] = useState(null);
   const [poolsError, setPoolsError] = useState(null);
+  const [activePool, setActivePool] = useState(undefined); // undefined = loading, null = none active
   const [isToggling, setIsToggling] = useState(false);
   const [acceptingId, setAcceptingId] = useState(null);
   const [actionError, setActionError] = useState(null);
@@ -45,9 +52,16 @@ function DriverDashboard() {
       .catch((err) => setPoolsError(err instanceof ApiError ? err.message : "Could not load pending requests."));
   }
 
+  function loadActivePool() {
+    apiFetch("/api/driver/history", { token })
+      .then((history) => setActivePool(history.find((p) => ACTIVE_POOL_STATUSES.includes(p.status)) ?? null))
+      .catch(() => setActivePool(null)); // non-critical section — fail quiet, not a page-level error
+  }
+
   useEffect(() => {
     loadTesla();
     loadPools();
+    loadActivePool();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
@@ -75,6 +89,7 @@ function DriverDashboard() {
     try {
       await apiFetch(`/api/driver/pools/${poolId}/accept`, { method: "POST", token });
       loadPools();
+      loadActivePool();
     } catch (err) {
       setActionError(err instanceof ApiError ? err.message : "Could not accept this pool.");
     } finally {
@@ -111,6 +126,8 @@ function DriverDashboard() {
           </div>
         </div>
       )}
+
+      {activePool && <ActiveTripCard pool={activePool} />}
 
       {actionError && <div className="mb-4"><ErrorBanner>{actionError}</ErrorBanner></div>}
 
@@ -178,6 +195,32 @@ function DriverDashboard() {
         </ul>
       )}
     </main>
+  );
+}
+
+// Once a driver accepts a pool, it's the ONE thing they're actively doing — not history yet.
+// Persistent card at the top of the dashboard so they don't have to dig through history to get
+// back to it. Disappears on its own once the pool reaches COMPLETED/CANCELLED (activePool becomes
+// null on the next load), at which point it correctly belongs in history instead.
+function ActiveTripCard({ pool }) {
+  const stops = pool.memberships
+    .map((m) => `${m.rideRequest.pickupZone.name} → ${m.rideRequest.destinationZone.name}`)
+    .join(", ");
+
+  return (
+    <Link
+      href={`/driver/pools/${pool.id}`}
+      className="mb-6 block rounded-2xl border-2 border-blue-200 bg-blue-50 p-5 shadow-sm transition hover:border-blue-300"
+    >
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <span className="text-xs font-semibold uppercase tracking-wide text-blue-700">
+          Active trip
+        </span>
+        <StatusBadge status={pool.status} />
+      </div>
+      <p className="truncate text-sm font-medium text-slate-900">{stops}</p>
+      <p className="mt-2 text-sm font-semibold text-blue-700">Continue trip →</p>
+    </Link>
   );
 }
 
