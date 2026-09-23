@@ -872,7 +872,7 @@ temp-server-restart race that only a live `docker compose up` run could have cau
 | No `pool_id` column on `ride_requests` | **PASS** | `prisma/schema.prisma` — `RideRequest` model has no such field; `PoolMembership.rideRequestId` is the sole, `@unique` link. Read in full. |
 | Tesla `driver_id` UNIQUE | **PASS** | `prisma/schema.prisma` — `@unique`; `teslaService.registerTesla` also pre-checks and catches `P2002`. Read in full. |
 | MariaDB-vs-MySQL-8 (raw SQL) | **PASS** | Grepped every `$queryRaw`/`$executeRaw` call site and all 5 migration files — no MariaDB-specific syntax anywhere (standard `SELECT ... FOR UPDATE`/`UPDATE ... SET`, standard DDL). |
-| MariaDB-vs-MySQL-8 (concurrency path exercised in CI) | **GAP FOUND, FIXED** | `docker-verify.yml`'s smoke test only ever called `GET /health`/`GET /api/zones` — the row-locked seat-claim path had never run against real MySQL 8 in CI, only against MariaDB locally (`npm run test:integration`). Extended the workflow with a step that pools Nusrat+Rafiq concurrently against the live containerized stack and asserts `seatsOccupied: 2`. |
+| MariaDB-vs-MySQL-8 (concurrency path exercised in CI) | **GAP FOUND, FIXED — AND THE FIX FOUND A REAL BUG** | `docker-verify.yml`'s smoke test only ever called `GET /health`/`GET /api/zones` — the row-locked seat-claim path had never run against real MySQL 8 in CI, only against MariaDB locally (`npm run test:integration`). Extended the workflow with a step that pools Nusrat+Rafiq concurrently — **its first run failed**: both landed in separate `OPEN` pools on the same Tesla, a genuine violation of the "one active pool per Tesla" invariant that had never been caught before. See `docs/decisions.md` item 26 for the full root-cause account and fix. |
 
 **What was fixed this pass:**
 - `backend/tests/security.test.js` (new, 7 cases) — regression coverage for the Section 13.4/13.5
@@ -880,12 +880,25 @@ temp-server-restart race that only a live `docker compose up` run could have cau
   origins), `X-Request-Id` presence/matching/uniqueness, and the auth-only 429 rate limit.
 - `.github/workflows/docker-verify.yml` — new step exercising the `SELECT ... FOR UPDATE` pooling
   path against real MySQL 8 (previously only reads were exercised).
-- `docs/decisions.md` item 25 — full account of the audit and why the gaps existed.
+- **A real concurrency bug** (`docs/decisions.md` item 26): `matchingService.matchRideRequest` ran
+  under MySQL's default `REPEATABLE READ` isolation, which pinned the transaction's read snapshot
+  at a plain (non-locking) read *before* the `FOR UPDATE` tesla lock was acquired — so the
+  "does this Tesla already have an active pool" check could still see stale pre-lock data even
+  after successfully waiting on the lock, letting two concurrent first-time ride requests both
+  create a pool on the same Tesla. Fixed by running that transaction (and
+  `rideService.cancelRideRequest`'s, same structural pattern) under `ReadCommitted` isolation
+  instead. A related efficiency gap surfaced by the fix (the loser of the Tesla race fell all the
+  way through to unpooled instead of joining the winner's new pool) was fixed alongside it —
+  `matchRideRequest` now retries the compatible-pool search once before giving up.
+- `docs/decisions.md` items 25–26 — full account of the audit, the gaps, and the bug.
 
-**Tests passed/failed:** `npm test` → 75/75 (68 + 7 new). CI (`docker-verify.yml`) → to be
-confirmed green on this push, including the new concurrency-path step.
+**Tests passed/failed:** `npm test` → 76/76 (68 + 8 new — 7 security + 1 new mocked matching-retry
+case). `npm run test:integration` → 2/2 (the existing seat-claim race, plus a new one: two
+brand-new concurrent requests for the same idle Tesla now correctly land in exactly one pool),
+confirmed deterministic across 5 consecutive local runs against MariaDB. CI (`docker-verify.yml`)
+→ to be confirmed green against real MySQL 8 on this push.
 
-**Known issues / unresolved:** none found beyond the two gaps above, both fixed.
+**Known issues / unresolved:** none found beyond the items above, all fixed.
 
 **Next task:** Phase 11 — record the 6-minute video, cut `release/v1.0.0` from `pre-release`.
 Deployment is on hold — the project owner will decide the hosting approach (or confirm the

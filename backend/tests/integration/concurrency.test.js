@@ -145,3 +145,67 @@ test("two concurrent requests for the last seat: exactly one wins, seats_occupie
   const finalMembershipCount = await prisma.poolMembership.count({ where: { poolId } });
   expect(finalMembershipCount).toBe(2);
 }, 20000);
+
+// Regression test for docs/decisions.md item 26 — found live via CI against real MySQL 8, not by
+// any test that existed before this one. The test above only races for the last seat in an
+// *already-existing* pool; it never exercised the "two brand-new requests race to open the
+// *first* pool on the same Tesla" path, which is where the actual bug was: under MySQL's default
+// REPEATABLE READ isolation, findEligibleOnlineTesla's "does this tesla already have an active
+// pool" check (a plain read) can still see a pre-lock snapshot even after successfully acquiring
+// the FOR UPDATE tesla lock, because an earlier plain read elsewhere in the same transaction
+// (findCompatibleOpenPool) already pinned that snapshot before the lock was taken. Fixed by
+// running matchRideRequest's transaction under ReadCommitted isolation instead.
+test("two concurrent first-time requests for the same Tesla: only one pool is ever created", async () => {
+  const raceDriver = await prisma.user.create({
+    data: {
+      name: "Integration Test Driver (new-pool race)",
+      email: `integration-driver-race-${Date.now()}@dhakateslapool.test`,
+      passwordHash: "not-a-real-hash",
+      role: "DRIVER",
+      phone: "01700000097",
+    },
+  });
+  const raceTesla = await prisma.tesla.create({
+    data: { driverId: raceDriver.id, name: "Integration Test Car (race)", capacity: 3, status: "ONLINE" },
+  });
+  const others = await prisma.tesla.findMany({
+    where: { status: "ONLINE", id: { not: raceTesla.id } },
+    select: { id: true },
+  });
+  const otherIds = others.map((t) => t.id);
+  if (otherIds.length > 0) {
+    await prisma.tesla.updateMany({ where: { id: { in: otherIds } }, data: { status: "OFFLINE" } });
+  }
+
+  try {
+    const nusrat = await createPassenger("NewPoolRaceNusrat");
+    const rafiq = await createPassenger("NewPoolRaceRafiq");
+    const nusratRequest = await createRideRequest(nusrat.id);
+    const rafiqRequest = await createRideRequest(rafiq.id);
+
+    const [nusratResult, rafiqResult] = await Promise.all([
+      matchRideRequest(nusratRequest, banani, mohakhali),
+      matchRideRequest(rafiqRequest, banani, mohakhali),
+    ]);
+
+    expect(nusratResult.pooled).toBe(true);
+    expect(rafiqResult.pooled).toBe(true);
+    // The actual invariant under test: both land in the SAME pool, not two separate ones on the
+    // same Tesla (the "one active pool per Tesla" invariant, docs/decisions.md item 7).
+    expect(nusratResult.poolId).toBe(rafiqResult.poolId);
+
+    const pools = await prisma.pool.findMany({ where: { teslaId: raceTesla.id } });
+    expect(pools).toHaveLength(1);
+    expect(pools[0].seatsOccupied).toBe(2);
+  } finally {
+    await prisma.poolMembership.deleteMany({
+      where: { rideRequestId: { in: rideRequestIds.slice(-2) } },
+    });
+    await prisma.pool.deleteMany({ where: { teslaId: raceTesla.id } });
+    await prisma.tesla.delete({ where: { id: raceTesla.id } });
+    await prisma.user.delete({ where: { id: raceDriver.id } });
+    if (otherIds.length > 0) {
+      await prisma.tesla.updateMany({ where: { id: { in: otherIds } }, data: { status: "ONLINE" } });
+    }
+  }
+}, 20000);

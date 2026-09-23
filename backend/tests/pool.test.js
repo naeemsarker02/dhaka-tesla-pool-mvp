@@ -75,6 +75,9 @@ describe("matchRideRequest — Section 4 matching rule + Section 6 row-locked se
     };
     prisma.__tx.pool.findMany.mockResolvedValueOnce([incompatiblePool]);
     prisma.__tx.$queryRaw.mockResolvedValueOnce([]); // no eligible Tesla for a new pool either
+    // No eligible Tesla -> one more compatible-pool check (docs/decisions.md item 26); still
+    // incompatible.
+    prisma.__tx.pool.findMany.mockResolvedValueOnce([incompatiblePool]);
 
     const shirinRequest = { id: "ride-shirin", seatsRequested: 1 };
     const result = await matchRideRequest(shirinRequest, BANANI, MIRPUR);
@@ -86,6 +89,8 @@ describe("matchRideRequest — Section 4 matching rule + Section 6 row-locked se
   it("leaves the ride request unpooled when no OPEN pool matches and no Tesla is eligible", async () => {
     prisma.__tx.pool.findMany.mockResolvedValueOnce([]);
     prisma.__tx.$queryRaw.mockResolvedValueOnce([]); // e.g. Bullet already has a non-terminal pool
+    // No eligible Tesla -> one more compatible-pool check (docs/decisions.md item 26); still none.
+    prisma.__tx.pool.findMany.mockResolvedValueOnce([]);
 
     const result = await matchRideRequest({ id: "ride-x", seatsRequested: 1 }, BANANI, MOHAKHALI);
 
@@ -103,6 +108,8 @@ describe("matchRideRequest — Section 4 matching rule + Section 6 row-locked se
     };
     prisma.__tx.pool.findMany.mockResolvedValueOnce([fullPool]);
     prisma.__tx.$queryRaw.mockResolvedValueOnce([]);
+    // No eligible Tesla -> one more compatible-pool check (docs/decisions.md item 26); still full.
+    prisma.__tx.pool.findMany.mockResolvedValueOnce([fullPool]);
 
     const result = await matchRideRequest({ id: "ride-x", seatsRequested: 1 }, BANANI, MOHAKHALI);
 
@@ -122,12 +129,42 @@ describe("matchRideRequest — Section 4 matching rule + Section 6 row-locked se
     prisma.__tx.$queryRaw.mockResolvedValueOnce([{ seats_occupied: 3 }]);
     // No eligible Tesla for a fallback new pool (Bullet is the only Tesla and already has this pool).
     prisma.__tx.$queryRaw.mockResolvedValueOnce([]);
+    // No eligible Tesla -> one more compatible-pool check (docs/decisions.md item 26); no
+    // candidate this time (keeps the mock simple — a real re-check would re-lock and find the
+    // same full pool, covered by the "does not join a pool that would exceed capacity" case).
+    prisma.__tx.pool.findMany.mockResolvedValueOnce([]);
 
     const result = await matchRideRequest({ id: "ride-x", seatsRequested: 1 }, BANANI, MOHAKHALI);
 
     expect(result).toEqual({ poolId: null, pooled: false });
     expect(prisma.__tx.poolMembership.create).not.toHaveBeenCalled();
     expect(prisma.__tx.$executeRaw).not.toHaveBeenCalled();
+  });
+
+  // Regression test for docs/decisions.md item 26 — a concurrent request may have opened a
+  // compatible pool while this one lost the race for a new-pool-eligible Tesla; it should still
+  // be able to join that pool on a second look, rather than being left unpooled on pure timing.
+  it("joins a pool a concurrent request just opened, after losing the no-eligible-Tesla race", async () => {
+    prisma.__tx.pool.findMany.mockResolvedValueOnce([]); // first look: no compatible pool yet
+    prisma.__tx.$queryRaw.mockResolvedValueOnce([]); // no eligible Tesla to open a new pool on
+
+    const justOpenedPool = {
+      id: "pool-1",
+      status: "OPEN",
+      seatsOccupied: 1,
+      tesla: { capacity: 3 },
+      memberships: [{ rideRequest: { pickupZone: BANANI, destinationZone: MOHAKHALI } }],
+    };
+    prisma.__tx.pool.findMany.mockResolvedValueOnce([justOpenedPool]); // second look: it exists now
+    prisma.__tx.$queryRaw.mockResolvedValueOnce([{ seats_occupied: 1 }]); // locked re-read: room
+
+    const result = await matchRideRequest({ id: "ride-x", seatsRequested: 1 }, BANANI, MOHAKHALI);
+
+    expect(result).toEqual({ poolId: "pool-1", pooled: true });
+    expect(prisma.__tx.poolMembership.create).toHaveBeenCalledWith({
+      data: { poolId: "pool-1", rideRequestId: "ride-x", seats: 1 },
+    });
+    expect(prisma.__tx.pool.create).not.toHaveBeenCalled();
   });
 });
 

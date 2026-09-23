@@ -540,3 +540,71 @@ in it.
 **Confirmed present, no changes needed (see PROGRESS.md for the full checklist):** 13.1, 13.2,
 13.3, 13.6, 6.2 (all genuinely implemented, matching item 20); the two separate state machines; no
 `pool_id` column; Tesla `driver_id` uniqueness.
+
+---
+
+### 26. A real concurrency bug, found by the audit's own new CI step: two pools on one Tesla (2026-09-23)
+
+**Context:** item 25's audit extended `docker-verify.yml` to exercise the row-locked seat-claim
+path against real MySQL 8 (Nusrat + Rafiq requesting concurrently). The very first run of that new
+step failed — not a CI/infrastructure problem this time, but a genuine application bug: Nusrat and
+Rafiq's simultaneous `POST /api/rides` calls each created their **own** `OPEN` pool on the same
+Tesla (`seatsOccupied: 1` each), violating the documented "one active pool per Tesla" invariant
+(`docs/decisions.md` item 7) — an invariant that items 17/18 had specifically claimed was closed
+via row-locking, and that the pre-existing `npm run test:integration` suite had never actually
+disproven, because it only ever raced two requests for the *last seat in an already-existing
+pool*, never two brand-new requests racing to create the *first* pool on an idle Tesla.
+
+**Root cause:** `matchingService.matchRideRequest`'s transaction runs `findCompatibleOpenPool` (a
+plain, non-locking read) as its *first* statement. Under MySQL's server-default `REPEATABLE READ`
+isolation, a transaction's very first read — locking or not — pins the consistent-read snapshot
+used by every later *plain* read in that same transaction. `findEligibleOnlineTesla`'s own
+`SELECT ... FOR UPDATE` on the `teslas` row correctly serializes the two transactions (the second
+genuinely blocks until the first commits), but the very next line — `pool.findFirst(...)` checking
+whether that Tesla already has an active pool — is a plain read, so it can still see the *stale*
+pre-lock snapshot even after successfully acquiring the lock and waiting for the other transaction
+to commit. Locking reads bypass the snapshot for their own result; this check wasn't one. Result:
+transaction 2 correctly waits for transaction 1's tesla-row lock, but then incorrectly still
+concludes "no active pool exists yet" and creates a second one.
+
+**Why `tryClaimSeatInPool`'s equivalent check was fine:** its capacity check (`pool.seats_occupied
++ seatsRequested > capacity`) reads the value from the same `SELECT ... FOR UPDATE` query that
+holds the lock — a locking read, which always returns the latest committed data regardless of
+isolation level or snapshot timing. `findEligibleOnlineTesla`'s active-pool check does the locking
+read on `teslas` but the *plain* read on `pools` — an asymmetry between the two lock sites that
+made one immune to this bug and the other not.
+
+**Fix:** run `matchRideRequest`'s transaction under `Prisma.TransactionIsolationLevel.ReadCommitted`
+instead of the MySQL default. Under `READ COMMITTED`, *every* read — not just locking ones — sees
+the latest committed data at the moment it executes, which is exactly what this row-lock-based
+concurrency pattern was implicitly assuming all along. Applied the same fix to
+`rideService.cancelRideRequest`'s transaction, which has the identical structural pattern (a plain
+`rideRequest.findUnique` first, then a `pools` row lock, then a plain `poolMembership.count` read
+after the lock) — untested by any existing scenario, but the same root cause would let two members
+of the same pool cancelling at nearly the same instant both see a stale non-zero remaining-member
+count and neither ever cancel the now-actually-empty pool.
+
+**A second, related gap fixed in the same pass:** with the isolation fix alone, re-running the new
+regression test showed Nusrat's request winning the Tesla race and Rafiq's losing it *entirely*
+(`pooled: false`) rather than joining Nusrat's newly-created pool — a correctness fix that exposed
+a separate efficiency gap: the loser of the new-pool race never re-checked for a compatible pool
+after losing, even though the winner may have just created exactly the pool it needed. Fixed by
+retrying `findCompatibleOpenPool`/`tryClaimSeatInPool` once more if `findEligibleOnlineTesla`
+returns no eligible Tesla, before finally giving up as unpooled — `ReadCommitted` guarantees this
+second look sees the winner's just-committed pool.
+
+**Tests added:**
+- `tests/integration/concurrency.test.js` — new real-database test: two brand-new concurrent
+  requests for the same idle Tesla now correctly land in exactly one shared pool
+  (`nusratResult.poolId === rafiqResult.poolId`, `pools).toHaveLength(1)`), confirmed deterministic
+  across 5 consecutive runs.
+- `tests/pool.test.js` — new mocked unit test for the late-join retry path, plus updated the three
+  existing "no eligible Tesla" scenarios to account for the extra read.
+
+**Why this is the most important finding of this whole audit pass:** unlike items 20–25 (all
+documentation/code gaps between what was claimed and what was built), this was a genuine
+correctness bug in code that had been believed — and documented — to be correct, caught only
+because the audit's own new CI step happened to exercise a code path (two simultaneous *first*
+pool-matching requests) that no test, local or CI, had exercised before. It's the clearest evidence
+in this project for why "the code looks right and the tests pass" is not the same claim as "this
+was actually run under the condition it claims to handle."

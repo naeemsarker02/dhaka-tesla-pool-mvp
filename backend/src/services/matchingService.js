@@ -1,3 +1,4 @@
+const { Prisma } = require("@prisma/client");
 const { prisma } = require("../lib/prisma");
 
 const NON_TERMINAL_POOL_STATUSES = ["OPEN", "MATCHED", "DRIVER_ARRIVED", "STARTED"];
@@ -81,44 +82,72 @@ async function findEligibleOnlineTesla(tx) {
 // Called right after a ride_request is created. Either joins a compatible OPEN pool or opens a
 // new one on an eligible Tesla — or leaves the request unpooled if neither is possible.
 // ride_request.status is never touched here — it stays REQUESTED either way (Section 3.1).
+//
+// isolationLevel: ReadCommitted — required, not just extra-safe. MySQL's server default
+// (REPEATABLE READ) pins this transaction's consistent-read snapshot at its first statement,
+// which here is findCompatibleOpenPool's plain (non-locking) read — *before* the FOR UPDATE tesla
+// lock below is even acquired. A locking read always sees the latest committed row regardless of
+// isolation level, but findEligibleOnlineTesla's "does this tesla already have an active pool"
+// check is a plain read, so under REPEATABLE READ it can still see the pre-lock snapshot even
+// after the lock is granted — letting two concurrent first-time requests both decide the same
+// Tesla is free and each create a competing pool for it (caught live via CI against real MySQL 8,
+// docs/decisions.md item 26; the existing seat-claim concurrency test never exercised this path
+// since it races for a seat in an *already-existing* pool, not for who creates the first one).
 async function matchRideRequest(rideRequest, pickupZone, destinationZone) {
-  return prisma.$transaction(async (tx) => {
-    const candidatePool = await findCompatibleOpenPool(
-      tx,
-      pickupZone.cluster,
-      destinationZone.cluster,
-      rideRequest.seatsRequested
-    );
+  return prisma.$transaction(
+    async (tx) => {
+      // Looks for a compatible OPEN pool and tries to claim a seat in it. Returns the poolId on
+      // success, null if no candidate exists or the seat claim lost a race.
+      const tryJoinCompatiblePool = async () => {
+        const candidatePool = await findCompatibleOpenPool(
+          tx,
+          pickupZone.cluster,
+          destinationZone.cluster,
+          rideRequest.seatsRequested
+        );
+        if (!candidatePool) return null;
 
-    if (candidatePool) {
-      const claimed = await tryClaimSeatInPool(
-        tx,
-        candidatePool.id,
-        candidatePool.tesla.capacity,
-        rideRequest.id,
-        rideRequest.seatsRequested
-      );
-      if (claimed) {
-        return { poolId: candidatePool.id, pooled: true };
+        const claimed = await tryClaimSeatInPool(
+          tx,
+          candidatePool.id,
+          candidatePool.tesla.capacity,
+          rideRequest.id,
+          rideRequest.seatsRequested
+        );
+        return claimed ? candidatePool.id : null;
+      };
+
+      const firstAttemptPoolId = await tryJoinCompatiblePool();
+      if (firstAttemptPoolId) {
+        return { poolId: firstAttemptPoolId, pooled: true };
       }
-      // Lost the race for the last seat under concurrency — fall through and try opening a new
-      // pool instead, same as if no compatible pool had existed at all.
-    }
 
-    const tesla = await findEligibleOnlineTesla(tx);
-    if (!tesla) {
-      return { poolId: null, pooled: false };
-    }
+      const tesla = await findEligibleOnlineTesla(tx);
+      if (!tesla) {
+        // No eligible Tesla to open a new pool on — but a concurrent request may have just
+        // created a compatible pool while this one was blocked waiting on the tesla lock (e.g.
+        // both Nusrat and Rafiq request at nearly the same instant; whichever loses the tesla
+        // race should still be able to join the pool the winner just opened, rather than being
+        // left unpooled purely on timing). ReadCommitted guarantees this second look sees it if
+        // so — docs/decisions.md item 26.
+        const lateJoinPoolId = await tryJoinCompatiblePool();
+        if (lateJoinPoolId) {
+          return { poolId: lateJoinPoolId, pooled: true };
+        }
+        return { poolId: null, pooled: false };
+      }
 
-    const pool = await tx.pool.create({
-      data: { teslaId: tesla.id, seatsOccupied: rideRequest.seatsRequested },
-    });
-    await tx.poolMembership.create({
-      data: { poolId: pool.id, rideRequestId: rideRequest.id, seats: rideRequest.seatsRequested },
-    });
+      const pool = await tx.pool.create({
+        data: { teslaId: tesla.id, seatsOccupied: rideRequest.seatsRequested },
+      });
+      await tx.poolMembership.create({
+        data: { poolId: pool.id, rideRequestId: rideRequest.id, seats: rideRequest.seatsRequested },
+      });
 
-    return { poolId: pool.id, pooled: true };
-  });
+      return { poolId: pool.id, pooled: true };
+    },
+    { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted }
+  );
 }
 
 module.exports = { matchRideRequest, NON_TERMINAL_POOL_STATUSES };
