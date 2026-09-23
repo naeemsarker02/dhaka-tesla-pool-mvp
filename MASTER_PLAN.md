@@ -772,6 +772,9 @@ curl, so the one unverified piece gets a real CI run for free before Phase 10/11
 - [x] Concurrent `matchRideRequest` calls for the same Tesla never create two separate `OPEN`
       pools (Section 6.3 regression test — the specific bug real MySQL 8 caught) — real-DB
       integration test, run deterministically 5/5
+- [x] `cancelRideRequest` regression-tested for the same snapshot-isolation class of bug (found in
+      a follow-up audit, same root cause as `matchRideRequest`, same `READ COMMITTED` fix) — real-DB
+      test, `docs/decisions.md` items 25-27
 
 ---
 
