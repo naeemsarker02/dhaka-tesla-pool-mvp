@@ -847,6 +847,40 @@ polish. Needs the project owner.
 
 ---
 
+## Phase 11 — Live deployment
+
+**Status:** Complete.
+
+**What was implemented:** Backend deployed to Render (Free tier, `pre-release` branch, root
+`backend/`), MySQL provisioned on Aiven (Free tier, new `dhaka_tesla_pool` database created
+alongside the account's other projects), frontend deployed to Vercel (Hobby/free tier). Full live
+smoke test (signup/login, Nusrat+Rafiq pooling through to fare finalization at ৳70.50/৳85.50,
+cancellation) passed against the real deployed URLs.
+
+**Bug found and fixed during deployment:** Vercel's first import auto-selected `master` as the
+production branch. Changing the branch-tracking setting to `pre-release` afterward did not
+retroactively rebuild the site — the live build kept serving `master`, which was missing PR #5's
+entire dashboard-polish rebuild (a branch-divergence gap already documented in
+`docs/decisions.md` item 27, not a new one). Fixed by pushing a trigger commit to `pre-release`
+and re-verifying the new UI was actually live before taking README screenshots. Full writeup:
+`docs/decisions.md` item 28.
+
+**Files changed:** `README.md` (Deployment, Key Decisions, AI Usage sections),
+`docs/decisions.md` (item 28), `docs/screenshots/live-deploy/*.jpg` (new).
+
+**Tests passed/failed:** Live smoke test only (signup, login, pooling, fare finalization,
+cancellation) — no code changes in this phase, so the existing `npm test` / CI suite is
+unaffected.
+
+**Documentation updated:** `README.md`, `docs/decisions.md`, this file.
+
+**Known issues:** None outstanding for deployment. Video (Phase 11's other deliverable) still
+needs the project owner to record it.
+
+**Next task:** Cut `release/v1.0.0` from `pre-release`. Record the demo video.
+
+---
+
 ## Phase 10.5 — Full Section 13/6.2 re-audit (2026-09-23)
 
 **Status:** Complete. Triggered by the project owner after three separate "marked complete, not

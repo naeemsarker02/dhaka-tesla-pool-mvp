@@ -304,18 +304,28 @@ Section 6; cancellation/seat-release flow: Section 6.1.
 
 ## Deployment
 
-**Not publicly deployed.** `MASTER_PLAN.md` Section 1's hosting row names Railway/PlanetScale/
-Aiven (backend+DB) and Vercel (frontend) as candidates, contingent on "whichever free-tier
-MySQL-compatible host is actually available at deploy time" (`docs/decisions.md` item 6) — that
-availability check requires creating an account on one of these providers, which this automated
-session cannot do (account creation is outside what it's permitted to perform on the project
-owner's behalf). Per the same item's own fallback: **the Docker Compose setup is the documented,
-reproducible deployment story**, and unlike a from-scratch local `docker compose up`, it's
-genuinely CI-verified end-to-end (`.github/workflows/docker-verify.yml`, `docs/decisions.md`
-item 22) — the same command that would run on a real host has already been proven to bring up a
-healthy stack with migrations and seed data applied automatically. Picking an actual provider,
-creating the account, and deploying is the next concrete step before submission, needs the
-project owner's own credentials.
+**Live.** Backend on [Render](https://render.com) (Free tier), MySQL on [Aiven](https://aiven.io)
+(Free tier), frontend on [Vercel](https://vercel.com) (Hobby/free tier) — the free-tier host
+named in `docs/decisions.md` item 6.
+
+- **Frontend:** https://dhaka-tesla-pool-mvp.vercel.app
+- **Backend:** https://dhaka-tesla-pool-mvp-1.onrender.com (`/health` → `{"status":"ok"}`)
+
+Deployed from the `pre-release` branch on both sides. The Render free instance spins down after
+inactivity, so the first request after a quiet period can take up to ~50s to wake it.
+
+Full end-to-end smoke test passed against these live URLs (not localhost): signup/login for a
+passenger and a driver, the Nusrat+Rafiq pooling flow through to fare finalization, and
+cancellation — see `docs/decisions.md` item 28 for the one deployment issue found and fixed along
+the way (Vercel's first build silently shipped from `master`, missing the dashboard-polish PR).
+
+| | |
+|---|---|
+| **Live login page** | **Live ride status — pooled fare finalized to ৳70.50** |
+| ![Live login](./docs/screenshots/live-deploy/login-live.jpg) | ![Live pool matched](./docs/screenshots/live-deploy/pool-matched-fare-live.jpg) |
+
+The Docker Compose setup remains the CI-verified (`.github/workflows/docker-verify.yml`)
+reproducible fallback for running the stack locally.
 
 ## API Overview
 
@@ -351,6 +361,17 @@ See [`docs/decisions.md`](./docs/decisions.md) for the running, dated log. Highl
   cancellations — a deliberate simplification, documented as a known limitation below.
 - One-active-pool-per-Tesla invariant and new-pool Tesla-selection policy — a gap in the original
   plan, resolved and logged with rationale in `docs/decisions.md` item 7.
+- **Isolation-level bug** (`docs/decisions.md` item 26): under InnoDB's default `REPEATABLE READ`,
+  `matchRideRequest`'s very first read inside the transaction pinned a stale snapshot for the rest
+  of it — a later `SELECT ... FOR UPDATE` row-lock alone didn't fix it, since the lock doesn't
+  refresh a snapshot already taken. Two pools could form on the same Tesla under real concurrency.
+  Fixed by running `matchRideRequest` and `cancelRideRequest` under explicit `READ COMMITTED`
+  (`prisma.$transaction(fn, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted })`),
+  caught by a new CI concurrency test, not manual testing.
+- **Tailwind purge bug** (commit `a0dab8d`): `tailwind.config.js`'s `content` glob only scanned
+  `app/**`, never `components/` or `lib/` — component-only utility classes (`StatusBadge`'s status
+  colors, `NavBar`'s layout) were at risk of being silently purged from the production build.
+  Fixed by extending the glob to `components/**` and `lib/**` too.
 
 ## Known Limitations
 
@@ -433,6 +454,19 @@ disallowed-origin request and confirmed CORS silently omitted `Access-Control-Al
 21 rapid login attempts and confirmed the 21st got `429`, and confirmed the same `requestId`
 appears in the response header, the error JSON body, and the server's own log line. See
 `docs/decisions.md` item 23.
+
+**Same day — live deployment (2026-09-23):** deployed the backend to Render, MySQL to Aiven, and
+the frontend to Vercel, with browser automation driving all three consoles end-to-end. Caught a
+real deployment bug along the way, not just a code bug: Vercel's first import auto-selected
+`master` as the production branch before the setting was changed to `pre-release`, and a first
+look comparing only the two branches' tip commits wrongly concluded the live build was equivalent
+either way. Re-checked with the full branch diff instead of just the tip commits
+(`git diff --stat master pre-release`) and found `master` was missing PR #5's entire
+dashboard-polish rebuild (50 files, `StatusStepper`/`SeatOccupancy`/`FareDisplay`/design-system
+components) — a branch-divergence gap from `docs/decisions.md` item 27's direct-push-to-master
+incident, not a new mistake. Fixed by pushing a trigger commit to `pre-release` and re-verifying
+the live smoke test against the corrected deployment before taking this section's screenshots. See
+`docs/decisions.md` item 28.
 
 ## Demo Video
 
