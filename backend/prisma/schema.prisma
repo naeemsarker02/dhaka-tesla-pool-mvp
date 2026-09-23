@@ -85,21 +85,28 @@ model Zone {
 // No pool_id column here — pool_memberships is the sole relationship to pools (Phase 4),
 // per docs/erd.md. estimated_fare_paisa is set at creation (no discount); fare_paisa starts
 // NULL and is finalized once, at pool MATCHED (docs/fare-model.md).
+// idempotencyKey (MASTER_PLAN.md Section 13.1) — nullable+unique, a repeat POST /api/rides with
+// the same key returns the original row instead of creating a duplicate.
+// lateCancellation/cancellationFeePaisa (Section 6.2, grace-window cancellation) — computed and
+// stored on cancel, never charged (no payment gateway in this MVP).
 model RideRequest {
-  id                 String            @id @default(uuid())
-  passengerId        String            @map("passenger_id")
-  pickupZoneId       String            @map("pickup_zone_id")
-  destinationZoneId  String            @map("destination_zone_id")
-  seatsRequested     Int               @map("seats_requested")
-  status             RideRequestStatus @default(REQUESTED)
-  estimatedFarePaisa Int               @map("estimated_fare_paisa")
-  farePaisa          Int?              @map("fare_paisa")
-  requestedAt        DateTime          @default(now()) @map("requested_at")
-  matchedAt          DateTime?         @map("matched_at")
-  arrivedAt          DateTime?         @map("arrived_at")
-  startedAt          DateTime?         @map("started_at")
-  completedAt        DateTime?         @map("completed_at")
-  cancelledAt        DateTime?         @map("cancelled_at")
+  id                   String            @id @default(uuid())
+  passengerId          String            @map("passenger_id")
+  pickupZoneId         String            @map("pickup_zone_id")
+  destinationZoneId    String            @map("destination_zone_id")
+  seatsRequested       Int               @map("seats_requested")
+  status               RideRequestStatus @default(REQUESTED)
+  estimatedFarePaisa   Int               @map("estimated_fare_paisa")
+  farePaisa            Int?              @map("fare_paisa")
+  idempotencyKey       String?           @unique @map("idempotency_key")
+  lateCancellation     Boolean           @default(false) @map("late_cancellation")
+  cancellationFeePaisa Int?              @map("cancellation_fee_paisa")
+  requestedAt          DateTime          @default(now()) @map("requested_at")
+  matchedAt            DateTime?         @map("matched_at")
+  arrivedAt            DateTime?         @map("arrived_at")
+  startedAt            DateTime?         @map("started_at")
+  completedAt          DateTime?         @map("completed_at")
+  cancelledAt          DateTime?         @map("cancelled_at")
 
   passenger       User @relation(fields: [passengerId], references: [id])
   pickupZone      Zone @relation("PickupZone", fields: [pickupZoneId], references: [id])

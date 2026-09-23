@@ -1,5 +1,8 @@
-# Phase 1 skeleton: backend + MySQL only. No automatic migrations/seed yet —
-# that lands in Phase 9 (feature/docker-deploy) per MASTER_PLAN.md Section 8.
+# Phase 9: full stack. All env values here are MVP dev-only defaults (documented, never real
+# secrets) so `docker compose up` works standalone on a fresh clone with zero setup — per
+# MASTER_PLAN.md Section 0 ("Docker Compose must bring up everything with one command"). For any
+# real deployment, override these (e.g. via a `.env` file passed to `docker compose --env-file`,
+# or your host's secret manager) rather than editing this file.
 services:
   mysql:
     image: mysql:8
@@ -20,14 +23,36 @@ services:
   backend:
     build: ./backend
     restart: unless-stopped
-    env_file:
-      - ./backend/.env
     environment:
       DATABASE_URL: "mysql://root:password@mysql:3306/dhaka_tesla_pool"
+      PORT: 4000
+      JWT_SECRET: "docker-compose-dev-only-secret-do-not-use-in-production"
+      GRACE_WINDOW_SECONDS: 60
     ports:
       - "4000:4000"
     depends_on:
       mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:4000/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Runs in the *browser*, not inside the Docker network — must point at a host-reachable
+        # URL (localhost, since backend's port 4000 is published to the host above), never the
+        # internal service name "backend".
+        NEXT_PUBLIC_API_URL: "http://localhost:4000"
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
         condition: service_healthy
 
 volumes:

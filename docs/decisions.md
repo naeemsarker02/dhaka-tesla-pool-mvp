@@ -272,3 +272,78 @@ options were `POST /api/teslas` (creates, wrong for a read) and `PATCH /api/tesl
 a 404 error — mirrors how the frontend already treats "no Tesla" as a normal case, showing a
 registration form). Same category of small, justified addition as `GET /api/zones`
 (`docs/decisions.md` item 14) — flagged rather than silently added.
+
+### 20. Backfilled three Section 13/6.2 requirements that had been skipped (2026-09-23)
+
+**Context:** re-reading `MASTER_PLAN.md` in full against the actual Phase 3/6 code (prompted by a
+schema review) found that three items explicitly marked "part of the plan, not optional extras"
+(`MASTER_PLAN.md` Section 0) were never implemented, despite `docs/PROGRESS.md` marking Phases 3
+and 6 "Complete":
+
+- **13.1 Idempotency on `POST /api/rides`** — no `idempotency_key` column, no header handling.
+- **13.2 One active ride request per passenger** — `createRideRequest` never checked for an
+  existing `REQUESTED`/`MATCHED`/`DRIVER_ARRIVED`/`STARTED` request before creating a new one.
+- **13.6 `seatsRequested` bounded to `1..3`** — the Zod schema only enforced "positive integer",
+  no upper bound.
+- **6.2 Grace-window cancellation** — no `late_cancellation`/`cancellation_fee_paisa` columns, no
+  `GRACE_WINDOW_SECONDS` env var, `cancelRideRequest` never computed either flag.
+
+**Decision:** implemented all four exactly per their MASTER_PLAN.md spec, not redesigned:
+- `ride_requests` gained `idempotency_key` (nullable, unique), `late_cancellation` (boolean,
+  default false), `cancellation_fee_paisa` (nullable int) — migration
+  `20260923110514_add_idempotency_and_grace_window_cancellation`.
+- `rideService.createRideRequest` now takes an optional `idempotencyKey`: a repeat with the same
+  `(passengerId, idempotencyKey)` returns the original row (checked up front, and again on a
+  unique-constraint race via Prisma error code `P2002`) instead of creating a duplicate or
+  re-running the matching service. The one-active-ride check runs before zone validation, keyed on
+  `ACTIVE_RIDE_STATUSES = [REQUESTED, MATCHED, DRIVER_ARRIVED, STARTED]`.
+- `rideController.create` reads the key from the `Idempotency-Key` request header (`req.get`, case
+  -insensitive per HTTP semantics) rather than a body field — matches the header-based option in
+  Section 13.1.
+- `seatsRequested` validator now `.min(1).max(3)`.
+- `rideService.cancelRideRequest` computes `lateCancellation`/`cancellationFeePaisa` from
+  `rideRequest.matchedAt` (the ride request's own `matchedAt`, set at pool-accept time — same
+  instant as `pool.matchedAt`, so using the per-row column avoids an extra query) against
+  `GRACE_WINDOW_SECONDS` (env, default 60), using the new `calculateCancellationFeePaisa` in
+  `src/lib/fare.js` (`floor(farePaisa * 20 / 100)`, integer-only per the money rule). Written on the
+  same `rideRequest.update` call as the `CANCELLED` transition — no extra query, per spec.
+
+**Why flagged as a backfill, not silently patched:** `docs/PROGRESS.md`'s existing Phase 3/6
+entries describe these phases as fully complete and don't mention any of the four items being
+deferred — this was a genuine gap between the plan and the shipped code, not a documented
+trade-off, so it's logged here explicitly rather than quietly folded into the existing phase
+write-ups. Migration applied and verified against the same live MariaDB instance as prior phases;
+tests updated/added in `tests/ride.test.js` and `tests/cancel.test.js`.
+
+### 21. Phase 9 (Docker) completed without a live Docker Engine available (2026-09-23)
+
+**Context:** this development environment has no `docker`/`docker compose` CLI installed (checked:
+`docker --version` fails in both the POSIX shell and PowerShell). Phase 9's Dockerfiles,
+`docker-compose.yml`, `.dockerignore` files, and `backend/docker-entrypoint.sh` were already
+present (built in an earlier session against this same constraint) when this pass started.
+
+**Decision:** rather than claim the full containerized stack was verified when it wasn't, this
+pass did everything verifiable *without* a Docker Engine and documented the gap explicitly:
+- Validated `docker-compose.yml`'s YAML syntax (`python -c "yaml.safe_load(...)"`).
+- Read every Dockerfile and `docker-entrypoint.sh` line by line for logical correctness (build
+  order, `prisma generate` after `COPY`, `NEXT_PUBLIC_API_URL` passed as a build arg since Next.js
+  bakes `NEXT_PUBLIC_*` vars in at build time not runtime, LF line endings on the shell script per
+  `.gitattributes` — CRLF would break `#!/bin/sh` inside the Linux container).
+- Added a `GRACE_WINDOW_SECONDS` env var to the `backend` service (was missing — the Section 6.2
+  backfill added this env var after the compose file was first written) and a `healthcheck` on
+  `backend` (`GET /health` via a `node -e` one-liner, no extra package install needed), with
+  `frontend` now depending on `backend: condition: service_healthy` instead of just "started".
+- Ran what the containers actually run, directly on the host: `npx next build` + `npm start`
+  (production frontend, confirmed `200` on `/` and `/login` after clearing a stale `.next` cache
+  left over from an interrupted earlier build — not a code bug) and `node src/server.js` (backend,
+  already verified live in the prior backfill pass).
+
+**What's still unverified, honestly:** an actual `docker compose up --build` run — container
+networking, the `mysql:8` healthcheck gating, the entrypoint's `prisma migrate deploy`/`db seed`
+sequence executing inside the container, and MySQL 8 specifically (vs. the MariaDB 10.4 this repo
+has been live-verified against throughout, per item 13). Documented as the top item in README's
+Known Limitations rather than silently assumed to work — this is a repo audit's job (flag the gap),
+not a job to fabricate a verification that didn't happen.
+
+**Also written this pass:** `docs/scaling.md` (Section 10 bonus doc, reasoning-only — was
+referenced from the README's Concurrency Handling section as "not yet written" since Phase 0).

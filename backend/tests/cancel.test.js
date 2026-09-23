@@ -86,7 +86,12 @@ describe("POST /api/rides/:id/cancel — Section 6.1 cases", () => {
     expect(res.status).toBe(200);
     expect(prisma.__tx.rideRequest.update).toHaveBeenCalledWith({
       where: { id: "ride-1" },
-      data: { status: "CANCELLED", cancelledAt: expect.any(Date) },
+      data: {
+        status: "CANCELLED",
+        cancelledAt: expect.any(Date),
+        lateCancellation: false,
+        cancellationFeePaisa: null,
+      },
     });
     expect(prisma.__tx.poolMembership.delete).not.toHaveBeenCalled();
     expect(prisma.__tx.$executeRaw).not.toHaveBeenCalled();
@@ -164,6 +169,103 @@ describe("POST /api/rides/:id/cancel — Section 6.1 cases", () => {
     expect(prisma.__tx.pool.update).toHaveBeenCalledWith({
       where: { id: "pool-1" },
       data: { status: "CANCELLED" },
+    });
+  });
+});
+
+describe("POST /api/rides/:id/cancel — Section 6.2 grace-window cancellation", () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it("cancel within the grace window (<=60s after MATCHED) is free, no fee", async () => {
+    const matchedAt = new Date(Date.now() - 30 * 1000); // 30s ago
+    prisma.__tx.rideRequest.findUnique
+      .mockResolvedValueOnce({
+        id: "ride-1",
+        passengerId: "nusrat-id",
+        status: "MATCHED",
+        matchedAt,
+        farePaisa: 8550,
+        poolMembership: { id: "membership-1", poolId: "pool-1", seats: 1 },
+      })
+      .mockResolvedValueOnce({ id: "ride-1", status: "CANCELLED" });
+    prisma.__tx.$queryRaw.mockResolvedValueOnce([{ id: "pool-1" }]);
+    prisma.__tx.poolMembership.count.mockResolvedValueOnce(1);
+
+    const app = createApp();
+    const res = await request(app)
+      .post("/api/rides/ride-1/cancel")
+      .set("Authorization", `Bearer ${passengerToken}`);
+
+    expect(res.status).toBe(200);
+    expect(prisma.__tx.rideRequest.update).toHaveBeenCalledWith({
+      where: { id: "ride-1" },
+      data: {
+        status: "CANCELLED",
+        cancelledAt: expect.any(Date),
+        lateCancellation: false,
+        cancellationFeePaisa: null,
+      },
+    });
+  });
+
+  it("cancel past the grace window flags late_cancellation and computes the fee (Rafiq's 8550 paisa fare -> 1710)", async () => {
+    const matchedAt = new Date(Date.now() - 90 * 1000); // 90s ago, past the 60s window
+    prisma.__tx.rideRequest.findUnique
+      .mockResolvedValueOnce({
+        id: "ride-1",
+        passengerId: "nusrat-id",
+        status: "MATCHED",
+        matchedAt,
+        farePaisa: 8550,
+        poolMembership: { id: "membership-1", poolId: "pool-1", seats: 1 },
+      })
+      .mockResolvedValueOnce({ id: "ride-1", status: "CANCELLED" });
+    prisma.__tx.$queryRaw.mockResolvedValueOnce([{ id: "pool-1" }]);
+    prisma.__tx.poolMembership.count.mockResolvedValueOnce(1);
+
+    const app = createApp();
+    const res = await request(app)
+      .post("/api/rides/ride-1/cancel")
+      .set("Authorization", `Bearer ${passengerToken}`);
+
+    expect(res.status).toBe(200);
+    expect(prisma.__tx.rideRequest.update).toHaveBeenCalledWith({
+      where: { id: "ride-1" },
+      data: {
+        status: "CANCELLED",
+        cancelledAt: expect.any(Date),
+        lateCancellation: true,
+        cancellationFeePaisa: 1710, // floor(8550 * 20 / 100)
+      },
+    });
+  });
+
+  it("cancel from REQUESTED is always free (late_cancellation false) regardless of elapsed time", async () => {
+    prisma.__tx.rideRequest.findUnique
+      .mockResolvedValueOnce({
+        id: "ride-1",
+        passengerId: "nusrat-id",
+        status: "REQUESTED",
+        matchedAt: null,
+        farePaisa: null,
+        poolMembership: null,
+      })
+      .mockResolvedValueOnce({ id: "ride-1", status: "CANCELLED" });
+
+    const app = createApp();
+    const res = await request(app)
+      .post("/api/rides/ride-1/cancel")
+      .set("Authorization", `Bearer ${passengerToken}`);
+
+    expect(res.status).toBe(200);
+    expect(prisma.__tx.rideRequest.update).toHaveBeenCalledWith({
+      where: { id: "ride-1" },
+      data: {
+        status: "CANCELLED",
+        cancelledAt: expect.any(Date),
+        lateCancellation: false,
+        cancellationFeePaisa: null,
+      },
     });
   });
 });

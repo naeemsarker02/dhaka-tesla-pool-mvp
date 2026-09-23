@@ -5,9 +5,14 @@
 A ride-pooling MVP built for the RoBenDevs Software Engineer assessment. Passengers request rides
 between predefined Dhaka zones; compatible requests are pooled into a single Tesla trip so riders
 share a car (and split part of the cost) while still tracking their own fare and status
-individually. **Current state: backend feature-complete through Phase 6, and both passenger and
-driver frontends (Phases 7–8) implemented and verified live in a real browser, all against a real
-MySQL/MariaDB instance. Docker Compose finalization (Phase 9) not started yet.**
+individually. **Current state: backend feature-complete (Phases 1–6, plus a Section 13/6.2
+backfill — idempotency, one-active-ride, seat bounds, grace-window cancellation), both passenger
+and driver frontends (Phases 7–8) implemented and verified live in a real browser, and a full
+`docker-compose.yml` (backend + frontend + MySQL 8, automatic migrations/seed) is in place
+(Phase 9). All backend behavior verified against a real MySQL/MariaDB instance directly; the
+Dockerized stack itself has been statically validated (YAML syntax, Dockerfile logic, production
+builds) but not yet run end-to-end with a real Docker Engine — no Docker installation was
+available in this environment. See Known Limitations.**
 
 ## Problem Statement
 
@@ -36,6 +41,12 @@ statuses bleed into each other is the actual engineering problem this MVP solves
 - [x] Ride history (`GET /api/rides`)
 - [x] Cancel a ride (`POST /api/rides/:id/cancel`, from `REQUESTED`/`MATCHED` only) — releases the
   pool seat and cancels an emptied pool, verified live
+- [x] Idempotent ride creation (`Idempotency-Key` header) — a repeat request with the same key
+  returns the original ride, never a duplicate
+- [x] One active ride request per passenger — a second `POST /api/rides` while one is already
+  `REQUESTED`/`MATCHED`/`DRIVER_ARRIVED`/`STARTED` is rejected with 409
+- [x] Grace-window cancellation — cancelling more than 60s after a pool is `MATCHED` flags
+  `late_cancellation` and computes (not charges) a `cancellation_fee_paisa`
 
 **Driver**
 - [x] Signup / login, register Tesla (`POST /api/teslas`, driver-only, rejects a second Tesla)
@@ -127,17 +138,37 @@ frontend/
 
 ## Prerequisites
 
+**Docker path (recommended — brings up everything with one command):**
+- Docker + Docker Compose
+
+**Manual path (without Docker):**
 - Node.js (tested with v24; anything reasonably current LTS should work — no Node-version-specific
   features used beyond standard ES2020+)
 - npm
-- A MySQL-compatible database (MySQL 8 or MariaDB — this repo has been verified against MariaDB
-  10.4 via XAMPP, see `docs/decisions.md` item 13)
-- Docker + Docker Compose (optional for now — full container setup lands in Phase 9)
+- A MySQL-compatible database (MySQL 8 or MariaDB — this repo has been verified end-to-end against
+  MariaDB 10.4 via XAMPP, see `docs/decisions.md` item 13; the Docker Compose path uses real
+  `mysql:8`, per Phase 2's carry-forward item, but has not been run against a live Docker Engine in
+  this environment — see Known Limitations)
 
 ## Environment Variables
 
-Not yet defined — `.env.example` lands in Phase 1 and is finalized in Phase 9
-(`feature/docker-deploy`). No real secrets will ever be committed.
+**Backend** (`backend/.env`, copy from `backend/.env.example`):
+
+| Variable | Purpose | Docker Compose default |
+|---|---|---|
+| `DATABASE_URL` | MySQL connection string consumed by Prisma | `mysql://root:password@mysql:3306/dhaka_tesla_pool` |
+| `PORT` | Port the Express API listens on | `4000` |
+| `JWT_SECRET` | Secret used to sign/verify JWTs | dev-only placeholder, override for any real deployment |
+| `GRACE_WINDOW_SECONDS` | Free-cancellation window (seconds) after a pool is `MATCHED` — Section 6.2 | `60` |
+
+**Frontend** (`frontend/.env.local`, copy from `frontend/.env.example`):
+
+| Variable | Purpose |
+|---|---|
+| `NEXT_PUBLIC_API_URL` | Base URL of the Express API this frontend talks to. Baked into the client bundle at **build time** (Next.js `NEXT_PUBLIC_*` convention), so it's passed as a Docker build arg, not a runtime env var — see `docker-compose.yml` |
+
+No real secrets are committed anywhere in this repo — only `.env.example` files, `.env`/`.env.local`
+are gitignored.
 
 ## Local Setup (without Docker)
 
@@ -169,8 +200,34 @@ note that the verified local instance is MariaDB, not MySQL proper.
 
 ## Docker Setup
 
-Not yet available — lands in Phase 9 (`feature/docker-deploy`). A backend + MySQL
-`docker-compose.yml` skeleton exists (Phase 1) but has no automatic migration/seed step yet.
+One command brings up the full stack — MySQL 8, backend, frontend:
+
+```bash
+docker compose up --build
+```
+
+- `mysql`: real `mysql:8` (not MariaDB — MariaDB was only the local dev DB, see
+  `docs/decisions.md` item 13), healthchecked via `mysqladmin ping`.
+- `backend`: waits for MySQL to be healthy, then `docker-entrypoint.sh` runs
+  `prisma migrate deploy` and `prisma db seed` automatically (both idempotent — safe on every
+  restart) before starting the server. Healthchecked via `GET /health`.
+- `frontend`: waits for the backend to be healthy, then serves the Next.js production build on
+  `:3000`. `NEXT_PUBLIC_API_URL` is baked in at build time as `http://localhost:4000` (the
+  browser talks to the host-published port, not the internal Docker network — see the comment in
+  `docker-compose.yml`).
+
+Once up: frontend at `http://localhost:3000`, backend at `http://localhost:4000`, MySQL at
+`localhost:3306`. Demo credentials are the same as the Local Setup section below (seeded
+automatically).
+
+All environment values in `docker-compose.yml` are MVP dev-only defaults, documented inline, never
+real secrets — override them (e.g. via `docker compose --env-file`) for any real deployment.
+
+**Verification status:** the compose file's YAML has been validated, each Dockerfile's logic
+reviewed line by line, and the production builds it runs (`next build`/`next start`,
+`node src/server.js`) have been exercised directly outside Docker. The full containerized stack
+has **not** been run end-to-end with a live Docker Engine, since none was available in the
+development environment — flagged explicitly rather than claimed, see Known Limitations.
 
 ## Running Tests
 
@@ -180,12 +237,14 @@ npm test                  # unit tests — mocked Prisma, no DB required
 npm run test:integration  # real-database concurrency test — requires DATABASE_URL
 ```
 
-57 unit tests currently pass (`health`, `auth`, `tesla`, `fare`, `ride`, `pool`, `poolAccept`,
+68 unit tests currently pass (`health`, `auth`, `tesla`, `fare`, `ride`, `pool`, `poolAccept`,
 `poolStatus`, `cancel` suites) — `fare`/`poolAccept` assert exact integer-paisa values against the
 master plan's worked example (no floating-point comparisons, including the Nusrat/Rafiq
-৳70.50/৳85.50 pooled fares); the rest use a **mocked** Prisma client (no live DB required) covering
-validation, hashing, JWT issuance, role/ownership guards, matching logic, state-machine transition
-guards, and HTTP status mapping.
+৳70.50/৳85.50 pooled fares); `ride`/`cancel` additionally assert the Section 13/6.2 backfill —
+idempotency replay, one-active-ride 409, seat bounds, and grace-window free-vs-late cancellation
+with exact fee arithmetic (৳85.50 fare → ৳17.10 fee). The rest use a **mocked** Prisma client (no
+live DB required) covering validation, hashing, JWT issuance, role/ownership guards, matching
+logic, state-machine transition guards, and HTTP status mapping.
 
 `npm run test:integration` runs a separate, real-database concurrency test
 (`tests/integration/concurrency.test.js`) that races two concurrent seat claims for the last seat
@@ -231,7 +290,7 @@ MySQL (InnoDB) row lock inside a Prisma interactive transaction (`tx.$queryRaw` 
 sufficient and simple to reason about at MVP scale — InnoDB's default `REPEATABLE READ` isolation
 combined with `FOR UPDATE` prevents a double seat-claim. At larger scale this would move to a
 Redis-backed distributed lock or a single-writer queue per Tesla to avoid DB contention under high
-concurrency (see `docs/scaling.md`, bonus, not yet written). Full pattern: `MASTER_PLAN.md`
+concurrency (see [`docs/scaling.md`](./docs/scaling.md), bonus). Full pattern: `MASTER_PLAN.md`
 Section 6; cancellation/seat-release flow: Section 6.1.
 
 ## Deployment
@@ -253,7 +312,7 @@ Full contract in `MASTER_PLAN.md` Section 7. Implemented so far:
 | GET | `/api/rides/:id` | passenger (own) | ✅ implemented |
 | GET | `/api/rides` | passenger | ✅ implemented |
 | GET | `/api/zones` | public | ✅ implemented (not in master plan's table — added for pickup/destination dropdowns, `docs/decisions.md` item 14) |
-| POST | `/api/rides/:id/cancel` | passenger (own) | ✅ implemented |
+| POST | `/api/rides/:id/cancel` | passenger (own) | ✅ implemented, incl. grace-window `late_cancellation`/`cancellation_fee_paisa` (Section 6.2) |
 | GET | `/api/driver/requests` | driver | ✅ implemented |
 | POST | `/api/driver/pools/:poolId/accept` | driver (own) | ✅ implemented |
 | PATCH | `/api/driver/pools/:poolId/status` | driver (own) | ✅ implemented |
@@ -275,13 +334,22 @@ See [`docs/decisions.md`](./docs/decisions.md) for the running, dated log. Highl
 
 ## Known Limitations
 
-- No real payment gateway.
+- No real payment gateway — `cancellation_fee_paisa` is computed and recorded for demonstration
+  only, nothing is ever deducted.
 - No real geo/routing — zone-to-zone distance is a hardcoded lookup table.
 - `fare_paisa` is not retroactively recalculated for remaining pool members if another member
   cancels after `MATCHED`.
 - JWT in `localStorage` (XSS-readable) instead of an `httpOnly` cookie — accepted MVP trade-off.
-- Single-region deploy, no read replicas, no distributed lock — see `docs/scaling.md` (bonus) for
-  the reasoning-only scale-out path.
+- No automatic stale-`OPEN`-pool expiry — a pool no driver ever accepts stays `OPEN` until the
+  passenger cancels it themselves (documented MVP decision, `MASTER_PLAN.md` Section 13.3).
+- No driver-initiated cancellation (no-show, emergency) — out of scope for this MVP.
+- The Dockerized stack (`docker compose up`) has been statically validated (YAML, Dockerfile
+  logic, production builds run directly) but not exercised end-to-end against a live Docker
+  Engine — none was available in the development environment. The same migrations/queries have
+  been verified live against MariaDB 10.4, not MySQL 8 specifically (`docs/decisions.md` item 13);
+  a first real `docker compose up` run is the natural next check before submission.
+- Single-region deploy, no read replicas, no distributed lock — see
+  [`docs/scaling.md`](./docs/scaling.md) (bonus) for the reasoning-only scale-out path.
 
 ## Next Improvements
 
@@ -306,8 +374,21 @@ picks its Tesla, or whether a Tesla can run more than one active pool at once �
 driver can only physically run one trip at a time. Confirmed and adopted the "one active pool per
 Tesla" invariant with an online-Tesla selection policy, logged in `docs/decisions.md` item 7.
 
-**One rejected/changed suggestion:** _To be filled in as implementation proceeds — no code has
-been written yet, so no implementation-level suggestions have been accepted or rejected._
+**One rejected/changed suggestion:** when adding the Section 6.2 grace-window cancellation, the
+first draft computed `late_cancellation` against `pool.matchedAt` (a second query on the `Pool`
+model). Changed to use `ride_request.matchedAt` instead — it's written to the exact same instant
+by `poolService.acceptPool` (Section 3.1), so reading it off the row already in hand avoids an
+extra query inside the cancellation transaction, with no behavior difference.
+
+**Later session — repo audit and backfill (2026-09-23):** re-read `MASTER_PLAN.md` in full against
+the actual code (schema + services), rather than trusting `docs/PROGRESS.md`'s phase statuses.
+Found that Section 13.1 (idempotency), 13.2 (one active ride per passenger), 13.6 (seat bounds),
+and Section 6.2 (grace-window cancellation) were all marked "part of the plan, not optional" but
+had never actually been implemented, despite Phases 3 and 6 being marked complete. **Accepted and
+implemented all four** exactly per their master-plan spec (see `docs/decisions.md` item 20) rather
+than re-designing them — this was a documentation/code gap, not an ambiguous requirement needing a
+new decision. Also completed Phase 9 (Docker Compose finalization: healthchecks, automatic
+migration/seed entrypoint, `GRACE_WINDOW_SECONDS` wired through) and this README pass.
 
 ## Demo Video
 
