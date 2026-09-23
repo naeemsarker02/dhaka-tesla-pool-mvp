@@ -640,3 +640,134 @@ Phase 7's browser check):**
 
 **Next task:** Phase 9 — `feature/docker-deploy` (full `docker-compose.yml` with automatic
 migrations/seed, `.env.example` finalized).
+
+---
+
+## Backfill — Section 13.1/13.2/13.6 and Section 6.2 (2026-09-23)
+
+**Status:** Complete, on `feature/docker-deploy` (found and fixed while re-reading
+`MASTER_PLAN.md` in full against the code, at the user's request to "follow all the instructions").
+
+**What was found:** four requirements marked "part of the plan, not optional extras"
+(`MASTER_PLAN.md` Section 0) had never actually been implemented, despite Phases 3 and 6 above
+being marked "Complete":
+- Section 13.1 — `Idempotency-Key` support on `POST /api/rides`.
+- Section 13.2 — one active ride request per passenger (409 on a second one).
+- Section 13.6 — `seatsRequested` bounded to `1..3`.
+- Section 6.2 — grace-window cancellation (`late_cancellation`, `cancellation_fee_paisa`).
+
+**What was implemented:**
+- **Schema:** `ride_requests` gained `idempotency_key` (nullable, unique), `late_cancellation`
+  (boolean, default false), `cancellation_fee_paisa` (nullable int) — migration
+  `20260923110514_add_idempotency_and_grace_window_cancellation`, applied to the same live MariaDB
+  instance used throughout.
+- **`rideService.createRideRequest`:** now takes an optional `idempotencyKey`; a repeat with the
+  same `(passengerId, idempotencyKey)` returns the original row (checked up front and again on a
+  `P2002` unique-constraint race) instead of duplicating or re-matching. One-active-ride check runs
+  before zone validation (`ACTIVE_RIDE_STATUSES = [REQUESTED, MATCHED, DRIVER_ARRIVED, STARTED]`).
+- **`rideController.create`:** reads the key from the `Idempotency-Key` request header.
+- **`src/validators/ride.js`:** `seatsRequested` now `.min(1).max(3)`.
+- **`rideService.cancelRideRequest`:** computes `lateCancellation`/`cancellationFeePaisa` from the
+  ride request's own `matchedAt` against `GRACE_WINDOW_SECONDS` (env, default 60), using a new
+  `calculateCancellationFeePaisa` in `src/lib/fare.js` (`floor(farePaisa * 20 / 100)`).
+- `.env.example`/`.env` gained `GRACE_WINDOW_SECONDS=60`.
+- `docs/erd.md` updated with the three new `ride_requests` columns; `docs/decisions.md` item 20
+  logs the gap and the fix; `MASTER_PLAN.md` Section 8 phase-status tracker corrected (it still
+  read "Phase 4 is NEXT" despite Phases 4–8 being long since merged — see `MASTER_PLAN.md` Rev 5
+  note).
+
+**Files changed:** `backend/prisma/schema.prisma`, `backend/prisma/migrations/**`,
+`backend/src/lib/fare.js`, `backend/src/validators/ride.js`, `backend/src/services/rideService.js`,
+`backend/src/controllers/rideController.js`, `backend/.env.example`, `backend/.env`,
+`docs/erd.md`, `docs/decisions.md`, `MASTER_PLAN.md`.
+
+**Tests added:** `tests/ride.test.js` — seat-bounds rejection (over/under), one-active-ride 409,
+idempotency replay (no duplicate `create` call), idempotency-miss creates and stores the key.
+`tests/cancel.test.js` — grace-window free cancel (≤60s), late cancel with fee computed
+(`floor(8550 * 20 / 100) = 1710`), cancel-from-`REQUESTED` always free; updated the existing exact
+`rideRequest.update` assertion to include the two new fields.
+
+**Tests passed/failed:** `npm test` → **68/68 passed** (60 existing + 8 new).
+`npm run test:integration` → 1/1 passed (unaffected).
+
+**Real-database verification (same live MariaDB instance):**
+- `seatsRequested: 4` → 400 with a clear Zod message.
+- Cancelling a real leftover `MATCHED` ride request from ~12 hours earlier correctly returned
+  `lateCancellation: true`, `cancellationFeePaisa: 1500` (`floor(7500 * 20 / 100)`, matching the
+  request's own `farePaisa`).
+- `POST /api/rides` with `Idempotency-Key: test-key-1` twice returned the identical ride request id
+  both times — confirmed only one row exists in the DB with that key.
+- A second, distinct `POST /api/rides` while the first was still active correctly 409'd.
+- Test data cleaned up (cancelled) afterward; leftover dev server process (holding the Prisma
+  client DLL locked, blocking `prisma generate`) stopped and restarted cleanly during
+  verification.
+
+**Documentation updated:** This file; `docs/decisions.md` item 20; `docs/erd.md`; `MASTER_PLAN.md`
+Rev 5 note and Section 8 phase statuses.
+
+**Known issues / unresolved:** none blocking.
+
+**Next task:** back to Phase 9 — `feature/docker-deploy`.
+
+---
+
+## Phase 9 — `feature/docker-deploy`
+
+**Status:** Complete as far as verifiable without a Docker Engine (see Known issues below — this
+is the one phase in this project not fully live-verified, flagged explicitly rather than assumed).
+
+**What was implemented (Dockerfiles/compose already existed from earlier work on this branch;
+this pass reviewed, fixed, and verified everything that could be verified):**
+- `backend/Dockerfile` — `node:20-alpine`, installs deps (including `prisma` CLI as a regular
+  dependency, needed at container runtime, not just build time), `prisma generate`, runs
+  `docker-entrypoint.sh` as `ENTRYPOINT` with `node src/server.js` as `CMD`.
+- `backend/docker-entrypoint.sh` — runs `prisma migrate deploy` then `prisma db seed`
+  automatically on every container start before `exec`-ing the real command (both idempotent, safe
+  to re-run). `.gitattributes` forces LF line endings on `*.sh` so this doesn't break inside the
+  Linux container if checked out on Windows.
+- `frontend/Dockerfile` — `node:20-alpine`, `NEXT_PUBLIC_API_URL` passed as a build `ARG` (Next.js
+  bakes `NEXT_PUBLIC_*` vars into the client bundle at build time, not read at container runtime),
+  `npm run build` then `npm start`.
+- `docker-compose.yml` — `mysql:8` (real MySQL, not MariaDB, with an `mysqladmin ping`
+  healthcheck), `backend` (waits for MySQL healthy, now also has its own `GET /health` healthcheck,
+  `GRACE_WINDOW_SECONDS` added to its env block — was missing from an earlier compose revision),
+  `frontend` (now waits for `backend: condition: service_healthy` instead of just "started").
+  `backend`/`frontend` ports published to the host; `NEXT_PUBLIC_API_URL` correctly points at
+  `localhost:4000` (host-reachable), not the internal `backend` service name, since it runs in the
+  browser.
+- `backend/.dockerignore`, `frontend/.dockerignore` — exclude `node_modules`, `.env`/`.env.local`,
+  `tests`, `.next`.
+
+**Files changed this pass:** `docker-compose.yml` (`GRACE_WINDOW_SECONDS`, backend healthcheck,
+frontend `depends_on` condition), `docs/decisions.md` (item 21), `docs/scaling.md` (new — the
+bonus Section 10 doc, referenced from the README since Phase 0 as "not yet written"), `README.md`
+(Docker Setup, Prerequisites, Environment Variables, Known Limitations, AI Usage, Features
+Implemented sections all updated to current reality).
+
+**Tests passed/failed:** `npm test` → 68/68 (unchanged, re-run after `docker-compose.yml`/doc
+edits to confirm no regression). `npm run test:integration` → 1/1.
+
+**Verification performed (no Docker Engine available in this environment — confirmed via
+`docker --version` failing in both the POSIX shell and PowerShell):**
+- `docker-compose.yml` YAML syntax validated (`python -c "import yaml; yaml.safe_load(...)"`).
+- Every Dockerfile and `docker-entrypoint.sh` reviewed line by line for correctness.
+- Ran what the containers actually execute, directly on the host: `npx next build` (clean,
+  10/10 routes) then `npm start` — confirmed `200` on `/` and `/login` in production mode (after
+  clearing a stale `.next` build cache left over from an earlier interrupted build — a leftover
+  artifact, not a code bug); `node src/server.js` (backend, already live-verified in the Section
+  13/6.2 backfill pass immediately prior).
+
+**Known issues / unresolved:**
+- **Not run end-to-end with a live Docker Engine.** Container networking, the `mysql:8`
+  healthcheck gating startup order, and the entrypoint's automatic migrate/seed sequence executing
+  *inside* a container have not been observed directly — only reasoned through by reading the
+  configuration. This is the top item in README's Known Limitations, not silently assumed to work.
+- Relatedly, MySQL 8 specifically (vs. MariaDB 10.4, the local dev DB used for every other live
+  verification in this project, `docs/decisions.md` item 13) has not been directly exercised —
+  Phase 2's carry-forward item is still technically open.
+- No public deployment yet (Phase 10/11, needs actual hosting credentials/account access this
+  session doesn't have).
+
+**Next task:** Phase 10 — pre-release stabilization (full test pass together, docs review,
+screenshots, then cut `pre-release`). Phase 11 (6-minute video + `release/v1.0.0`) needs the
+project owner's own recording — out of scope for an automated session.

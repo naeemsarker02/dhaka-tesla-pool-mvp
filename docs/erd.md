@@ -45,6 +45,9 @@ erDiagram
         enum status "REQUESTED|MATCHED|DRIVER_ARRIVED|STARTED|COMPLETED|CANCELLED"
         int estimated_fare_paisa "set at creation, no pool discount"
         int fare_paisa "nullable; finalized when the pool is MATCHED"
+        string idempotency_key "nullable, unique; POST /api/rides replay protection"
+        boolean late_cancellation "default false; see fare-model/decisions grace-window notes"
+        int cancellation_fee_paisa "nullable; computed not charged"
         datetime requested_at
         datetime matched_at
         datetime arrived_at
