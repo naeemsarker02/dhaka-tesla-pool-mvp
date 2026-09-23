@@ -715,3 +715,39 @@ that `pre-release` has, not just one commit's diff.
 the correct branch (Vercel deploys entirely from Git push events; there's no "deploy this existing
 branch" button), then re-ran the live smoke test against the new deployment to confirm the
 dashboard-polish UI is actually what's serving before taking README screenshots.
+
+### 29. Final frontend polish pass — stepper, active-trip card, demo-accounts panel (2026-09-23)
+
+**Context:** last engineering pass before the demo video, scoped explicitly to frontend-only
+polish on `feature/ui-final-polish` off `pre-release` — no backend logic touched.
+
+- **StatusStepper current-step distinction:** the current step was previously only
+  color-differentiated from upcoming steps, which doesn't read clearly at a glance (the brief's own
+  concern: "like in a video recording"). Made it a genuinely different *shape* — larger circle,
+  a `ring-4` halo, and a filled dot glyph instead of just a number — while completed steps keep
+  their checkmark treatment (already correct) and the `CANCELLED` banner gained an explicit ✕ icon
+  and one line of context instead of a bare colored dot, so it never reads as an interrupted
+  progress bar. `StatusStepper` is one component used by both `frontend/app/rides/[id]/page.js`
+  (passenger) and `frontend/app/driver/pools/[id]/page.js` (driver) already — same visual language
+  for both by construction, not by convention.
+- **Driver dashboard "Active Trip" card:** a driver who'd accepted a pool had no way back to it
+  except through History, which is wrong once it's the one thing they're actively doing. Added a
+  persistent card at the top of `/driver` for any pool in `MATCHED`/`DRIVER_ARRIVED`/`STARTED`,
+  linking straight to its detail page; disappears on its own once the pool reaches
+  `COMPLETED`/`CANCELLED` (it then correctly belongs in history) since it's driven by a fresh
+  `GET /api/driver/history` fetch on every dashboard load, not local component state. Frontend-only
+  — no new endpoint; the existing history response already returns pools of every status, this
+  just filters client-side for the three "in-flight" ones.
+- **Login page demo-accounts panel:** rewritten from a quiet gray footnote into a visually distinct,
+  clearly labeled "Demo accounts — for evaluators" panel (dashed amber border, one line per
+  account) so it can't be mistaken for part of the real login form. Same seed credentials as
+  before (`backend/prisma/seed.js` — `password123` for all four cast members), nothing invented.
+
+**Verification:** `npm run build` (frontend) and `npm test` (backend, 76/76, confirming the
+frontend-only change broke nothing) both clean. Visual/mobile check done against a local dev
+server pointed at the local seeded MySQL — not the live URLs — because CORS on the live Render
+backend only allows the live Vercel origin; verified all three changes (enlarged current-step
+circle, Active Trip card appearing/disappearing correctly across MATCHED→COMPLETED, cancelled-ride
+✕ banner) end-to-end with real API calls before merging. Merged `feature/ui-final-polish` into
+`pre-release` (`--no-ff`), fast-forwarded `release/v1.0.0` to match, and re-verified live on Vercel
+(auto-deployed on push) and Render (unaffected — no `backend/` files changed) after the merge.

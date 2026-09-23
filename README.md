@@ -468,6 +468,16 @@ incident, not a new mistake. Fixed by pushing a trigger commit to `pre-release` 
 the live smoke test against the corrected deployment before taking this section's screenshots. See
 `docs/decisions.md` item 28.
 
+**Same day — final frontend polish pass:** three targeted UI refinements
+(`feature/ui-final-polish`, merged `--no-ff`): `StatusStepper`'s current step is now a genuinely
+different shape (larger, ringed, dot glyph), not just a different color; the driver dashboard
+gained a persistent "Active Trip" card so an accepted pool doesn't require digging through
+History to get back to; the login page's demo-credentials block became a clearly labeled,
+visually distinct panel instead of a quiet footnote. Frontend-only — verified end-to-end against a
+local dev server with real API calls (the live Render backend's CORS allowlist only permits the
+live Vercel origin, so this couldn't be checked against localhost directly) before merging, then
+re-verified live post-deploy. Full writeup: `docs/decisions.md` item 29.
+
 ## Demo Video
 
 Not yet recorded — Phase 11.
