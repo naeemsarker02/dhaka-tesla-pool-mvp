@@ -974,3 +974,31 @@ cancellation-race test), 5/5 deterministic local runs.
 **Documentation updated:** `docs/decisions.md` item 27.
 
 **Next task:** Part 2 of this pass — frontend/dashboard visual and UX polish, on a feature branch.
+
+---
+
+## Phase 10.7 — Ride-status header polish (2026-09-24)
+
+**Status:** Complete — `feature/ride-status-pool-badge` merged `--no-ff` into `pre-release`.
+
+**What was implemented:** The passenger ride-detail page (`/rides/[id]`) showed the
+`StatusStepper` for `ride_request.status` alone, with no status badge in the header — visually
+inconsistent with the driver's pool-detail page, which pairs its header (seats/created-at) with a
+`StatusBadge` next to the stepper. Added the same `StatusBadge status={ride.status}` next to the
+pickup/destination header on the ride page so both role's status cards read as one visual pattern.
+No change to the underlying state machines — the ride page still tracks `ride_request.status`
+only, per the `RideRequest.status` / `Pool.status` separation in `MASTER_PLAN.md` — this was a
+visual-consistency fix, not a data-source change.
+
+**Files changed:** `frontend/app/rides/[id]/page.js`.
+
+**Tests added:** none (visual-only change, no logic touched).
+
+**Tests passed/failed:** `npm run build` (frontend) → compiled and generated all 10 routes
+successfully.
+
+**Documentation updated:** `docs/PROGRESS.md` (this entry).
+
+**Known issues:** none.
+
+**Next task:** confirm with the project owner before pushing `pre-release` to the deploy remote.
