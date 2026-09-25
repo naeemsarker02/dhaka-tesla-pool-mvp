@@ -31,7 +31,7 @@ export function StatusStepper({ status }) {
 
   return (
     <div>
-      <ol className="flex items-center" aria-label="Trip progress">
+      <ol className="flex items-start" aria-label="Trip progress">
       {LIFECYCLE_STEPS.map((step, index) => {
         const isComplete = currentIndex >= 0 && index < currentIndex;
         const isCurrent = index === currentIndex;
@@ -39,8 +39,10 @@ export function StatusStepper({ status }) {
         const isLast = index === LIFECYCLE_STEPS.length - 1;
 
         return (
-          <li key={step} className={`flex items-center ${isLast ? "" : "flex-1"}`}>
-            <div className="flex flex-col items-center gap-1.5">
+          <li key={step} className={`flex flex-col items-center ${isLast ? "" : "flex-1"}`}>
+            {/* Circle and connecting line share one row so the line centers on the circle,
+                independent of the label's height below it. */}
+            <div className="flex w-full items-center">
               <div
                 className={`flex shrink-0 items-center justify-center rounded-full transition-all ${
                   isCurrent
@@ -57,21 +59,21 @@ export function StatusStepper({ status }) {
               >
                 {isComplete ? "✓" : isCurrent ? "●" : index + 1}
               </div>
-              <span
-                className={`hidden text-center leading-tight sm:block ${
-                  isCurrent ? "text-xs font-bold text-slate-900" : "text-[11px] text-slate-500"
-                }`}
-                style={{ maxWidth: "5rem" }}
-              >
-                {style.label}
-              </span>
+              {!isLast && (
+                <div
+                  className={`mx-1.5 h-0.5 flex-1 rounded ${isComplete ? "bg-slate-900" : "bg-slate-200"}`}
+                  aria-hidden="true"
+                />
+              )}
             </div>
-            {!isLast && (
-              <div
-                className={`mx-1.5 h-0.5 flex-1 rounded ${isComplete ? "bg-slate-900" : "bg-slate-200"}`}
-                aria-hidden="true"
-              />
-            )}
+            <span
+              className={`hidden text-center leading-tight sm:block ${
+                isCurrent ? "text-xs font-bold text-slate-900" : "text-[11px] text-slate-500"
+              }`}
+              style={{ maxWidth: "5rem", marginTop: "0.375rem" }}
+            >
+              {style.label}
+            </span>
           </li>
         );
       })}
