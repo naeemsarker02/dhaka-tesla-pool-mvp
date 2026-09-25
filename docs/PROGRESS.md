@@ -1002,3 +1002,32 @@ successfully.
 **Known issues:** none.
 
 **Next task:** confirm with the project owner before pushing `pre-release` to the deploy remote.
+
+---
+
+## Phase 10.8 — StatusStepper connector-line alignment fix (2026-09-25)
+
+**Status:** Complete — `feature/ride-status-stepper-alignment` merged `--no-ff` into `pre-release`.
+
+**What was implemented:** The passenger ride-status stepper (`StatusStepper`, shared by both the
+passenger ride view and driver pool view) rendered its connecting line as a sibling of a
+`flex-col` circle+label block inside a `flex items-center` `<li>`. That centered the line against
+the whole item's height (circle + label text), not the circle itself — visibly offset, and worse
+for the current step since its circle is larger (`h-9` vs `h-7`). Restructured each step so the
+circle and its connecting line share their own `flex items-center` row, separate from the label
+below; the line now always aligns to the circle's true vertical center regardless of circle size
+or label presence. Purely visual — no change to `LIFECYCLE_STEPS`, status data, or either state
+machine.
+
+**Files changed:** `frontend/components/StatusStepper.js`.
+
+**Tests added:** none (visual-only change, no logic touched).
+
+**Tests passed/failed:** `npm run build` (frontend) → compiled and generated all 10 routes
+successfully.
+
+**Documentation updated:** `docs/PROGRESS.md` (this entry).
+
+**Known issues:** none.
+
+**Next task:** none pending.
