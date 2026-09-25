@@ -1,3 +1,4 @@
+const { Prisma } = require("@prisma/client");
 const { prisma } = require("../lib/prisma");
 
 const NON_TERMINAL_POOL_STATUSES = ["OPEN", "MATCHED", "DRIVER_ARRIVED", "STARTED"];
@@ -82,43 +83,46 @@ async function findEligibleOnlineTesla(tx) {
 // new one on an eligible Tesla — or leaves the request unpooled if neither is possible.
 // ride_request.status is never touched here — it stays REQUESTED either way (Section 3.1).
 async function matchRideRequest(rideRequest, pickupZone, destinationZone) {
-  return prisma.$transaction(async (tx) => {
-    const candidatePool = await findCompatibleOpenPool(
-      tx,
-      pickupZone.cluster,
-      destinationZone.cluster,
-      rideRequest.seatsRequested
-    );
-
-    if (candidatePool) {
-      const claimed = await tryClaimSeatInPool(
+  return prisma.$transaction(
+    async (tx) => {
+      const candidatePool = await findCompatibleOpenPool(
         tx,
-        candidatePool.id,
-        candidatePool.tesla.capacity,
-        rideRequest.id,
+        pickupZone.cluster,
+        destinationZone.cluster,
         rideRequest.seatsRequested
       );
-      if (claimed) {
-        return { poolId: candidatePool.id, pooled: true };
+
+      if (candidatePool) {
+        const claimed = await tryClaimSeatInPool(
+          tx,
+          candidatePool.id,
+          candidatePool.tesla.capacity,
+          rideRequest.id,
+          rideRequest.seatsRequested
+        );
+        if (claimed) {
+          return { poolId: candidatePool.id, pooled: true };
+        }
+        // Lost the race for the last seat under concurrency — fall through and try opening a new
+        // pool instead, same as if no compatible pool had existed at all.
       }
-      // Lost the race for the last seat under concurrency — fall through and try opening a new
-      // pool instead, same as if no compatible pool had existed at all.
-    }
 
-    const tesla = await findEligibleOnlineTesla(tx);
-    if (!tesla) {
-      return { poolId: null, pooled: false };
-    }
+      const tesla = await findEligibleOnlineTesla(tx);
+      if (!tesla) {
+        return { poolId: null, pooled: false };
+      }
 
-    const pool = await tx.pool.create({
-      data: { teslaId: tesla.id, seatsOccupied: rideRequest.seatsRequested },
-    });
-    await tx.poolMembership.create({
-      data: { poolId: pool.id, rideRequestId: rideRequest.id, seats: rideRequest.seatsRequested },
-    });
+      const pool = await tx.pool.create({
+        data: { teslaId: tesla.id, seatsOccupied: rideRequest.seatsRequested },
+      });
+      await tx.poolMembership.create({
+        data: { poolId: pool.id, rideRequestId: rideRequest.id, seats: rideRequest.seatsRequested },
+      });
 
-    return { poolId: pool.id, pooled: true };
-  });
+      return { poolId: pool.id, pooled: true };
+    },
+    { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted }
+  );
 }
 
 module.exports = { matchRideRequest, NON_TERMINAL_POOL_STATUSES };

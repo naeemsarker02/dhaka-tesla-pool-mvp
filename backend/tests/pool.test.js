@@ -26,6 +26,17 @@ describe("matchRideRequest — Section 4 matching rule + Section 6 row-locked se
     jest.clearAllMocks();
   });
 
+  it("runs matching in READ COMMITTED isolation to avoid stale reads under concurrent first-request races", async () => {
+    prisma.__tx.pool.findMany.mockResolvedValueOnce([]);
+    prisma.__tx.$queryRaw.mockResolvedValueOnce([]);
+
+    await matchRideRequest({ id: "ride-x", seatsRequested: 1 }, BANANI, MOHAKHALI);
+
+    expect(prisma.$transaction).toHaveBeenCalledWith(expect.any(Function), {
+      isolationLevel: "ReadCommitted",
+    });
+  });
+
   it("Nusrat and Rafiq end up in the same OPEN pool and stay REQUESTED (no status touched here)", async () => {
     // Nusrat's request: no existing OPEN pool, one eligible online Tesla -> new pool.
     prisma.__tx.pool.findMany.mockResolvedValueOnce([]);
