@@ -1,3 +1,10 @@
+// Driver-facing pool lifecycle: list a driver's OPEN pools, accept one (OPEN -> MATCHED), advance
+// it through DRIVER_ARRIVED/STARTED/COMPLETED, and read pool detail/history. Key invariant: every
+// ride_request status change here is a cascade off the pool's own status change, never edited
+// independently — accepting a pool finalizes each member's fare_paisa exactly once (pooled
+// discount only if 2+ members), and every non-terminal membership present at cascade time is
+// treated as active, since a cancelled member's membership row is deleted at cancel time, not
+// left dangling for this code to filter out.
 const { prisma } = require("../lib/prisma");
 const { getDistanceKm } = require("../data/zones");
 const { calculatePooledFarePaisa } = require("../lib/fare");
