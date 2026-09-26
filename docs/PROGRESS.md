@@ -1031,3 +1031,30 @@ successfully.
 **Known issues:** none.
 
 **Next task:** none pending.
+
+---
+
+## Phase 11 — Demo video link + README audit fixes (2026-09-27)
+
+**Status:** Complete — committed directly to `pre-release` (small docs-only fixes from a
+requirements audit; no feature branch per item, at the project owner's direction).
+
+**What was implemented:** A full requirements audit against the raw RoBenDevs PRD found the
+6-minute demo video was still unrecorded (README said "Not yet recorded — Phase 11") and two
+disclosure gaps in the README. The video has now been recorded and published
+(`https://youtu.be/WzC6yJBq8e0`); added the link near the top of `README.md` (right after the
+Summary) and filled in the previously-placeholder `## Demo Video` section. `docs/PROGRESS.md`
+(this entry) marks Phase 11's video deliverable complete instead of outstanding.
+
+**Files changed:** `README.md`, `docs/PROGRESS.md`.
+
+**Tests added:** N/A (documentation-only).
+
+**Tests passed/failed:** N/A.
+
+**Documentation updated:** `README.md` (Summary section + Demo Video section).
+
+**Known issues:** none.
+
+**Next task:** disclose the 6 direct-to-master commits and the Copilot coding-agent branch in
+README (same audit pass, separate commits).
