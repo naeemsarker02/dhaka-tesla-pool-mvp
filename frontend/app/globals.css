@@ -1,3 +1,18 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* Consistent spacing/typography scale — used instead of one-off values across pages. */
+:root {
+  --page-max-width: 42rem; /* 672px — matches the previous max-w-lg baseline, used everywhere now */
+}
+
+body {
+  font-feature-settings: "cv11", "ss01";
+}
+
+/* A subtle, deliberate focus ring for keyboard nav — not just the browser default. */
+:focus-visible {
+  outline: 2px solid theme("colors.blue.500");
+  outline-offset: 2px;
+}

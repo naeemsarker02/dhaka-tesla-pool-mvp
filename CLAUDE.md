@@ -121,6 +121,13 @@ Always integer paisa. Never a float literal (e.g. never `baseFare * 0.15`). Use
   `tx.$queryRaw` for the locking read and `tx.$executeRaw` (or `tx.<model>.update`) for the write,
   both inside the same `prisma.$transaction(async (tx) => { ... })` callback. A plain Prisma query
   outside a transaction does not lock anything.
+- **`FOR UPDATE` alone is not automatically sufficient under InnoDB's default `REPEATABLE READ`
+  isolation if the transaction reads anything before taking the lock** — that earlier read can pin
+  a stale snapshot for the rest of the transaction, even past a later lock. This bit us for real
+  (Section 6.3 in `MASTER_PLAN.md`): `matchRideRequest` and `cancelRideRequest` explicitly run under
+  `READ COMMITTED` (`prisma.$transaction(fn, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted })`)
+  for exactly this reason. Any new transaction that reads Tesla/pool state before locking it should
+  default to the same pattern — don't assume the default isolation level is safe without checking.
 - JWT payload stays minimal: `{ sub, role }` only — never put email/name/PII in the token. Token is
   carried as `Authorization: Bearer <token>`, held client-side (React context + `localStorage`).
   Auth-aware Next.js pages are client components (`"use client"`) — do not implement or claim

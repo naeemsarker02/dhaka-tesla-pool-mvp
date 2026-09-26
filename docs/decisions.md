@@ -475,3 +475,303 @@ definitely up).
 CI has caught that static review or local testing never would have (port 3306, missing OpenSSL,
 and now this) — a repeated, concrete demonstration of why Section 0/Phase 9's Docker requirement
 specifically calls for actually running the stack, not just reading the configuration carefully.
+
+---
+
+### 25. Full Section 13/6.2 re-audit, prompted by three prior misses (2026-09-23)
+
+**Context:** after items 20 (Section 13.1/13.2/13.6/6.2) and 23 (Section 13.4/13.5) each turned up
+a real "marked done, not actually built" gap, the project owner asked for a full item-by-item
+re-audit of every Section 13/6.2 requirement — not just the ones already caught — plus a
+re-verification of the core invariants (two state machines, no `pool_id`, Tesla ownership) and the
+MariaDB-vs-MySQL-8 question, on the reasoning that three misses in a row means the remaining
+"complete" items shouldn't be trusted just because they're marked that way.
+
+**What the audit actually did (grep + read the real code, not the checklist):**
+- Read `src/services/rideService.js` in full: confirmed 13.1 (idempotency-key dedup, including the
+  `P2002` race-recovery path), 13.2 (one-active-ride check, `ACTIVE_RIDE_STATUSES`), and 6.2
+  (grace-window `lateCancellation`/`cancellationFeePaisa` computation) are all genuinely present,
+  matching the item 20 backfill exactly.
+- Read `src/validators/ride.js`: confirmed 13.6 (`seatsRequested` bounded `.min(1).max(3)`).
+- Grepped `README.md`: confirmed 13.3 (stale-pool policy) is documented under Known Limitations as
+  a deliberate non-implementation, per the plan's own "documented, not auto-implemented" wording —
+  not silently missing.
+- Read `src/app.js` and all 5 controller files (15 route handlers total): confirmed 13.4's
+  `requestContext`/`requestLogger`/`errorHandler` and 13.5's `helmet`/`cors`/`authRateLimiter` are
+  registered as app-level middleware (not scoped to one router) and that every single controller
+  function uses the `try/catch -> next(err)` pattern, so no route can bypass the centralized
+  envelope. `validateBody` and the auth middleware were also checked — both go through
+  `next(new AppError(...))`, never a bare `throw` that would skip Express's error pipeline.
+- Read `prisma/schema.prisma`: confirmed `RideRequestStatus` and `PoolStatus` remain two separate
+  enums used by two separate transition tables (`src/lib/stateMachine.js`), `RideRequest` has no
+  `pool_id`/`poolId` field, and `Tesla.driverId` is still `@unique` (also enforced app-level in
+  `teslaService.registerTesla`, with a `P2002` catch as a second line of defense).
+- Grepped all 5 migration files and every `$queryRaw`/`$executeRaw` call site: nothing
+  MariaDB-specific found (standard `SELECT ... FOR UPDATE` / `UPDATE ... SET`, works identically on
+  both). But re-reading `docker-verify.yml` found the CI smoke test only ever exercised `GET
+  /health` and `GET /api/zones` — **the concurrency-critical `FOR UPDATE` row-lock path had never
+  actually run against real MySQL 8 in CI**, only against MariaDB locally
+  (`npm run test:integration`). This was the one place the audit's "re-verify against CI logs"
+  instruction actually found something not yet true.
+
+**What was found missing and fixed:**
+1. **No regression tests for the Section 13.4/13.5 backfill (item 23).** It had been verified live
+   with curl in that session, but nothing locked it in — a future change could silently break
+   `helmet`/CORS/rate-limiting/request-correlation with no test catching it. Added
+   `backend/tests/security.test.js` (7 cases: helmet headers present, CORS allows the configured
+   origin and omits the header for a disallowed one, `X-Request-Id` present and matching between
+   the header/error-body/a second concurrent request, and the auth rate limiter's 429 on the 21st
+   `/api/auth/login` attempt while other routes stay unaffected).
+2. **CI never exercised the row-locked seat-claim path against real MySQL 8.** Extended
+   `docker-verify.yml` with a step that logs in as Nusrat and Rafiq (seeded accounts), fires both
+   ride requests concurrently at real `mysql:8`, and asserts they land in one pool with
+   `seatsOccupied: 2` — the exact §5.2 scenario, which only passes if `SELECT ... FOR UPDATE`
+   actually serializes correctly against MySQL 8, not just MariaDB.
+
+**Why the earlier passes didn't catch these:** the item 20/23 backfills were each verified by
+manual curl/browser checks in the moment, which proves the code works *right then* but leaves
+nothing that fails later if the code regresses — exactly the gap a "was it actually tested"
+question is supposed to catch, and exactly why this re-audit was worth doing rather than trusting
+the checkmarks. The MySQL-8-vs-MariaDB CI gap existed because `docker-verify.yml`'s original scope
+(Phase 9, item 21/22) was "does the stack come up healthy," never explicitly "does the
+capacity-locking code path work here too" — a scope gap in the original smoke test, not an error
+in it.
+
+**Confirmed present, no changes needed (see PROGRESS.md for the full checklist):** 13.1, 13.2,
+13.3, 13.6, 6.2 (all genuinely implemented, matching item 20); the two separate state machines; no
+`pool_id` column; Tesla `driver_id` uniqueness.
+
+---
+
+### 26. A real concurrency bug, found by the audit's own new CI step: two pools on one Tesla (2026-09-23)
+
+**Context:** item 25's audit extended `docker-verify.yml` to exercise the row-locked seat-claim
+path against real MySQL 8 (Nusrat + Rafiq requesting concurrently). The very first run of that new
+step failed — not a CI/infrastructure problem this time, but a genuine application bug: Nusrat and
+Rafiq's simultaneous `POST /api/rides` calls each created their **own** `OPEN` pool on the same
+Tesla (`seatsOccupied: 1` each), violating the documented "one active pool per Tesla" invariant
+(`docs/decisions.md` item 7) — an invariant that items 17/18 had specifically claimed was closed
+via row-locking, and that the pre-existing `npm run test:integration` suite had never actually
+disproven, because it only ever raced two requests for the *last seat in an already-existing
+pool*, never two brand-new requests racing to create the *first* pool on an idle Tesla.
+
+**Root cause:** `matchingService.matchRideRequest`'s transaction runs `findCompatibleOpenPool` (a
+plain, non-locking read) as its *first* statement. Under MySQL's server-default `REPEATABLE READ`
+isolation, a transaction's very first read — locking or not — pins the consistent-read snapshot
+used by every later *plain* read in that same transaction. `findEligibleOnlineTesla`'s own
+`SELECT ... FOR UPDATE` on the `teslas` row correctly serializes the two transactions (the second
+genuinely blocks until the first commits), but the very next line — `pool.findFirst(...)` checking
+whether that Tesla already has an active pool — is a plain read, so it can still see the *stale*
+pre-lock snapshot even after successfully acquiring the lock and waiting for the other transaction
+to commit. Locking reads bypass the snapshot for their own result; this check wasn't one. Result:
+transaction 2 correctly waits for transaction 1's tesla-row lock, but then incorrectly still
+concludes "no active pool exists yet" and creates a second one.
+
+**Why `tryClaimSeatInPool`'s equivalent check was fine:** its capacity check (`pool.seats_occupied
++ seatsRequested > capacity`) reads the value from the same `SELECT ... FOR UPDATE` query that
+holds the lock — a locking read, which always returns the latest committed data regardless of
+isolation level or snapshot timing. `findEligibleOnlineTesla`'s active-pool check does the locking
+read on `teslas` but the *plain* read on `pools` — an asymmetry between the two lock sites that
+made one immune to this bug and the other not.
+
+**Fix:** run `matchRideRequest`'s transaction under `Prisma.TransactionIsolationLevel.ReadCommitted`
+instead of the MySQL default. Under `READ COMMITTED`, *every* read — not just locking ones — sees
+the latest committed data at the moment it executes, which is exactly what this row-lock-based
+concurrency pattern was implicitly assuming all along. Applied the same fix to
+`rideService.cancelRideRequest`'s transaction, which has the identical structural pattern (a plain
+`rideRequest.findUnique` first, then a `pools` row lock, then a plain `poolMembership.count` read
+after the lock) — untested by any existing scenario, but the same root cause would let two members
+of the same pool cancelling at nearly the same instant both see a stale non-zero remaining-member
+count and neither ever cancel the now-actually-empty pool.
+
+**A second, related gap fixed in the same pass:** with the isolation fix alone, re-running the new
+regression test showed Nusrat's request winning the Tesla race and Rafiq's losing it *entirely*
+(`pooled: false`) rather than joining Nusrat's newly-created pool — a correctness fix that exposed
+a separate efficiency gap: the loser of the new-pool race never re-checked for a compatible pool
+after losing, even though the winner may have just created exactly the pool it needed. Fixed by
+retrying `findCompatibleOpenPool`/`tryClaimSeatInPool` once more if `findEligibleOnlineTesla`
+returns no eligible Tesla, before finally giving up as unpooled — `ReadCommitted` guarantees this
+second look sees the winner's just-committed pool.
+
+**Tests added:**
+- `tests/integration/concurrency.test.js` — new real-database test: two brand-new concurrent
+  requests for the same idle Tesla now correctly land in exactly one shared pool
+  (`nusratResult.poolId === rafiqResult.poolId`, `pools).toHaveLength(1)`), confirmed deterministic
+  across 5 consecutive runs.
+- `tests/pool.test.js` — new mocked unit test for the late-join retry path, plus updated the three
+  existing "no eligible Tesla" scenarios to account for the extra read.
+
+**Why this is the most important finding of this whole audit pass:** unlike items 20–25 (all
+documentation/code gaps between what was claimed and what was built), this was a genuine
+correctness bug in code that had been believed — and documented — to be correct, caught only
+because the audit's own new CI step happened to exercise a code path (two simultaneous *first*
+pool-matching requests) that no test, local or CI, had exercised before. It's the clearest evidence
+in this project for why "the code looks right and the tests pass" is not the same claim as "this
+was actually run under the condition it claims to handle."
+
+---
+
+### 27. Full raw-brief cross-check (2026-09-23) — a real git-workflow gap, and one resolved open question
+
+**Context:** the project owner asked for a section-by-section cross-check of the actual code against
+the raw RoBenDevs brief's own words (Sections 3, 5, 12, 16), not `MASTER_PLAN.md` reviewed against
+itself, plus resolution of a standing open question about the `Pool.status` enum.
+
+**Section 3 (actor capabilities):** PASS. Every listed Passenger/Driver/Pool capability maps to a
+real, wired endpoint and a real frontend page calling it — confirmed by reading all 8 frontend
+`page.js` files and grepping each for its `apiFetch` call sites (signup/login route through
+`AuthContext`'s `signup`/`login`, which themselves call `apiFetch`).
+
+**Section 5 (fare model):** PASS, re-verified live rather than trusted from an earlier report — ran
+the exact Nusrat (Banani→Mohakhali)/Rafiq (Banani→Gulshan) scenario fresh against the real running
+backend + MariaDB: `estimatedFarePaisa` 7500/9000 at creation (no discount), `farePaisa` 7050/8550
+after Jashim accepts the pool — an exact match to the brief's own hand-calculable numbers. Along
+the way, found and cleaned up accumulated stray test data (leftover active ride requests, an
+orphaned pool, and a non-seed "Roton Mia"/"Dragoon" driver/Tesla account with `status: ONLINE` that
+was intercepting the seed cast's matches ahead of Jashim's `Bullet`) — restored to the state found
+(that stray Tesla's online status), not deleted, since it isn't this session's data to remove.
+
+**Section 12 (testing list):** PASS, with one gap found and fixed. Bullet's-capacity /
+invalid-transitions / pooled-fares / cross-user-modification / cancellation-rules were all already
+covered by existing tests, unaffected by item 26's isolation-level fix. The **new-pool-race**
+scenario (`tests/integration/concurrency.test.js`'s second test) only started passing *after* that
+fix — before it, the identical test failed exactly as item 26 describes. The **cancellation
+concurrency** scenario, however, had a preventive fix (`cancelRideRequest`'s `ReadCommitted`) with
+**no test at all** proving it under real concurrency — closed that gap this pass: a new integration
+test races two members of the same pool cancelling simultaneously and asserts the pool ends up
+`CANCELLED`, not orphaned with zero real members. Deterministic across 5 consecutive runs.
+
+**Section 16 ("what not to do"):**
+- **No secrets committed:** PASS. `git log --all -p` grepped for AWS-key patterns, `password`/
+  `secret`/`api_key` literal assignments, PEM private-key headers, and DB connection strings with
+  embedded credentials, across the *entire* history (not just current files) — the only matches
+  were `"password123"` (the documented seed/demo password, per the brief's own "demo credentials"
+  requirement) and `"test-secret-do-not-use-in-production"` (a labeled test-only JWT secret). No
+  `.env`, `.pem`, `.key`, or credentials file was ever committed (`git log --all --name-only`
+  grepped for those extensions/filenames, zero matches).
+- **No single giant initial commit:** PASS. The largest commit (`5539e60`,
+  "build(scaffold): initial backend/frontend structure", 24 files/7201 insertions) is 5429 of those
+  insertions from an auto-generated `package-lock.json` — the actual hand-written content is a
+  Phase-1-scoped scaffold (health check, Prisma datasource-only init, Next.js skeleton,
+  docker-compose skeleton), not the finished system.
+- **Story cast consistent:** PASS. Grepped `backend/src`, `backend/tests`, `backend/prisma`,
+  `frontend/app`, `frontend/components`, `frontend/lib`, `README.md`, and `docs/` for
+  `user1`/`driver1`/`John Doe`/`test user`/`foo bar` — every match was in a comment *quoting the
+  rule itself* (e.g. "never generic user1/driver1"), never an actual usage. Seed data
+  (`backend/prisma/seed.js`) consistently uses Jashim/Bullet/Nusrat/Rafiq/Shirin throughout.
+- **"Push all feature development directly to master" — FAIL, found and reported, not hidden.**
+  `git log --oneline c74b5a8..master` and `66ad506..c74b5a8` show 6 commits
+  (`3c2e1f0`, `369c0c4`, `5c49f42`, `4f8e0a7`, `4065ff9`, `8783816`) with a single parent each —
+  committed directly onto `master`, not merged in from a branch. Context, not excuse: 5 of the 6
+  were pushed in direct response to the project owner's own explicit instruction in that turn
+  ("Push the 4 local commits plus the two new ones... to origin/master"), during rapid CI-failure
+  debugging on work that had *already* been merged from `feature/docker-deploy` moments earlier
+  (`66ad506`); the 6th (`8783816`) was a same-fix cherry-pick applied directly to `master` to
+  unbreak CI there after an unrelated external PR merge (`c74b5a8`) had reintroduced a bug that
+  had already been fixed on `pre-release`. Neither justification changes the fact: this deviates
+  from the branch-per-change workflow Section 16/`CLAUDE.md` both require, and it's logged here
+  rather than smoothed over. Not rewriting history to hide it — `master` has already been built on
+  top of since (PRs, further pushes) and rewriting published history is its own, worse violation of
+  this project's own safety rules. Going forward (starting with the Part 2 frontend work in this
+  same session), feature work goes on a `feature/*` branch, full stop, including CI-only fixes.
+
+**Open decision — `Pool.status` including `MATCHED` — resolved, no rename:** an earlier, informal
+instruction (never written into `MASTER_PLAN.md` or `CLAUDE.md` — confirmed by grepping both for
+the phrase and finding no trace) said "MATCHED is a ride status, not a pool status." The shipped
+schema has `PoolStatus` include `MATCHED` (`OPEN → MATCHED → DRIVER_ARRIVED → ...`), which appears
+to conflict. It doesn't, on inspection: the raw brief's own "suggested lifecycle" (`REQUESTED →
+MATCHED/ACCEPTED → DRIVER_ARRIVED → STARTED → COMPLETED`) doesn't distinguish ride vs. pool at all
+— that split is `MASTER_PLAN.md`'s own Rev 2 correction (Section 3.1), which deliberately gives
+`Pool.status` its own `MATCHED` milestone (the driver accepting the pool) distinct from
+`RideRequest.status.MATCHED` (the passenger's own status, which flips *because of* that same
+event). The stale instruction predates that correction and was superseded by it, not left standing
+in conflict with it. **Decision: no rename.** The two-enum design is intentional, documented
+(`docs/erd.md`, Section 3.1/3.2), tested (`stateMachine.js`'s two separate transition tables,
+confirmed unconflated in item 25's audit), and load-bearing across Phases 4-8's merged code — a
+rename now would touch the schema, both services, every route/controller referencing pool status,
+and every test asserting on it, for zero functional benefit, purely to match an instruction that
+no longer has any live representation to conflict with.
+
+### 28. Vercel's first production deploy silently shipped from `master`, missing the dashboard polish (2026-09-23)
+
+**Context:** initial Vercel import auto-selected the repo's default branch (`master`) before the
+Production-branch setting was changed to `pre-release`. Vercel has no UI action to redeploy an
+existing branch without a new commit event, so the live site kept serving the `master` build even
+after the setting changed.
+
+**The mistake, stated plainly:** `master` never received PR #5
+(`feature/frontend-dashboard-polish`) — item 27 above already documents *why* (direct pushes onto
+`master` during CI firefighting, bypassing the normal `pre-release` merge path). A first look at
+just the two branch tips' commit diff (`6ff42fa` vs `8783816`) wrongly suggested the delta was
+backend-only (an Aiven CA-cert commit) and the live build was therefore equivalent either way. That
+was false: `git diff --stat master pre-release` shows 50 files changed, +1616/-503, entirely
+`frontend/` — `StatusStepper`, `SeatOccupancy`, `FareDisplay`, `EmptyState`, `ErrorBanner`,
+`Skeleton`, the Tailwind design-system rebuild of every page, and the mobile-responsive screenshots
+PR #5 added. None of it was live. Root cause of the wrong read: comparing branch *tips* is not the
+same as comparing full branch history — `master` is missing an entire merged PR's worth of commits
+that `pre-release` has, not just one commit's diff.
+
+**Fix:** pushed an empty `chore(deploy):` commit to `pre-release` to give Vercel a build event on
+the correct branch (Vercel deploys entirely from Git push events; there's no "deploy this existing
+branch" button), then re-ran the live smoke test against the new deployment to confirm the
+dashboard-polish UI is actually what's serving before taking README screenshots.
+
+### 29. Final frontend polish pass — stepper, active-trip card, demo-accounts panel (2026-09-23)
+
+**Context:** last engineering pass before the demo video, scoped explicitly to frontend-only
+polish on `feature/ui-final-polish` off `pre-release` — no backend logic touched.
+
+- **StatusStepper current-step distinction:** the current step was previously only
+  color-differentiated from upcoming steps, which doesn't read clearly at a glance (the brief's own
+  concern: "like in a video recording"). Made it a genuinely different *shape* — larger circle,
+  a `ring-4` halo, and a filled dot glyph instead of just a number — while completed steps keep
+  their checkmark treatment (already correct) and the `CANCELLED` banner gained an explicit ✕ icon
+  and one line of context instead of a bare colored dot, so it never reads as an interrupted
+  progress bar. `StatusStepper` is one component used by both `frontend/app/rides/[id]/page.js`
+  (passenger) and `frontend/app/driver/pools/[id]/page.js` (driver) already — same visual language
+  for both by construction, not by convention.
+- **Driver dashboard "Active Trip" card:** a driver who'd accepted a pool had no way back to it
+  except through History, which is wrong once it's the one thing they're actively doing. Added a
+  persistent card at the top of `/driver` for any pool in `MATCHED`/`DRIVER_ARRIVED`/`STARTED`,
+  linking straight to its detail page; disappears on its own once the pool reaches
+  `COMPLETED`/`CANCELLED` (it then correctly belongs in history) since it's driven by a fresh
+  `GET /api/driver/history` fetch on every dashboard load, not local component state. Frontend-only
+  — no new endpoint; the existing history response already returns pools of every status, this
+  just filters client-side for the three "in-flight" ones.
+- **Login page demo-accounts panel:** rewritten from a quiet gray footnote into a visually distinct,
+  clearly labeled "Demo accounts — for evaluators" panel (dashed amber border, one line per
+  account) so it can't be mistaken for part of the real login form. Same seed credentials as
+  before (`backend/prisma/seed.js` — `password123` for all four cast members), nothing invented.
+
+**Verification:** `npm run build` (frontend) and `npm test` (backend, 76/76, confirming the
+frontend-only change broke nothing) both clean. Visual/mobile check done against a local dev
+server pointed at the local seeded MySQL — not the live URLs — because CORS on the live Render
+backend only allows the live Vercel origin; verified all three changes (enlarged current-step
+circle, Active Trip card appearing/disappearing correctly across MATCHED→COMPLETED, cancelled-ride
+✕ banner) end-to-end with real API calls before merging. Merged `feature/ui-final-polish` into
+`pre-release` (`--no-ff`), fast-forwarded `release/v1.0.0` to match, and re-verified live on Vercel
+(auto-deployed on push) and Render (unaffected — no `backend/` files changed) after the merge.
+
+### 30. Two root commits predate the commit-message convention (2026-09-27)
+
+**Context:** a full requirements-audit pass flagged the repo's first two commits,
+`04d9b27` ("first commit") and `5dd1f92` ("setup"), as not following the `type(scope): description`
+convention Section 11/`CLAUDE.md` require. Confirmed: both sit at the very base of `master`/`main`,
+before `3e6e530` (`docs(architecture): add system architecture diagram and layer notes`), which is
+the first commit in the repo's history to use the convention.
+
+**Decision: leave them as-is, do not rewrite.** They predate the convention being adopted at all —
+there was no rule yet to violate at the time they were made — and both are trivially small
+(`04d9b27` adds a 1-line `README.md`, `5dd1f92` is repo scaffolding), not a disguised dump of
+finished work. Rewriting them (`rebase -i`, amend, or squash) would mean rewriting already-pushed,
+shared history on `master`/`main`/`pre-release`/`release/v1.0.0` — a materially worse violation of
+this project's own git-safety rules than two odd early commit messages. Noted here instead, per the
+same "log it, don't hide it, don't rewrite published history" approach already used for item 27's
+direct-to-master commits.
+
+### 31. Demo video runs 8 minutes, over the brief's suggested 6:00 cap (2026-09-27)
+
+**Context:** the recorded demo video (`https://youtu.be/WzC6yJBq8e0`, linked in README's "Recorded
+Video" section) runs approximately 8 minutes. Section 13 of the raw brief and this project's own
+`docs/DOCUMENTATION_PLAN.md` (Section 4, "hard 6-minute cap") call for ≤6:00. Not silently labeled
+as 6 minutes in the README — the top-of-README link and this entry both state the actual length.

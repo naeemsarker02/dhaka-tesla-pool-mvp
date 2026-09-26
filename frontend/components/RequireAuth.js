@@ -23,7 +23,11 @@ export function RequireAuth({ role, children }) {
   }, [isLoading, token, user, role, router]);
 
   if (isLoading) {
-    return <p className="p-6 text-slate-500">Loading…</p>;
+    return (
+      <div className="mx-auto max-w-3xl px-4 py-10 sm:px-6">
+        <div className="h-6 w-32 animate-pulse rounded bg-slate-200" />
+      </div>
+    );
   }
 
   if (!token || (role && user?.role !== role)) {

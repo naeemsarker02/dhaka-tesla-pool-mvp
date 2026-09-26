@@ -8,7 +8,14 @@ const prisma = new PrismaClient();
 const SEED_PASSWORD = "password123";
 const SALT_ROUNDS = 10;
 
-// Story cast per MASTER_PLAN.md Section 0 / CLAUDE.md — never generic user1/driver1.
+// Story cast, per MASTER_PLAN.md Section 0 / CLAUDE.md — never generic user1/driver1/passenger1.
+// Jashim (driver) owns Bullet (Tesla, capacity 3) — 3 seats because the brief's own scenario needs
+// room for Nusrat + Rafiq to pool together *and* leave exactly one seat for Shirin to race for,
+// which is the concurrency case the brief calls out by name (two passengers claiming the last
+// seat at once). Nusrat/Rafiq/Shirin are the three passengers; this script only seeds the cast,
+// their Tesla, and the zone list (including Banani/Mohakhali/Gulshan 1, the brief's own
+// pickup/destination trio) — the actual ride requests/pool for that scenario are created live
+// (via the API, in tests, or during the demo), not pre-seeded here.
 async function main() {
   const passwordHash = await bcrypt.hash(SEED_PASSWORD, SALT_ROUNDS);
 

@@ -1,5 +1,7 @@
 # Dhaka Tesla Pool
 
+▶️ **[Watch the 8-minute demo video](https://youtu.be/WzC6yJBq8e0)**
+
 ## Summary
 
 A ride-pooling MVP built for the RoBenDevs Software Engineer assessment. Passengers request rides
@@ -12,6 +14,16 @@ and driver frontends (Phases 7–8) implemented and verified live in a real brow
 verified end-to-end via CI (Phase 9 — no Docker installation is available in the local development
 environment, so GitHub Actions substitutes; see `.github/workflows/docker-verify.yml` and
 `docs/decisions.md` item 22, which also covers two real bugs that first CI run caught).**
+
+## Branch Guide
+
+`master` and `main` are the stable baseline — `main` exists because Vercel/GitHub default to it,
+`master` is the actual default here (see repo settings). `pre-release` is where day-to-day work
+lands and gets integration-tested before a release cut. `release/v1.0.0` is the frozen snapshot
+this submission points to — it's `pre-release` merged forward once a milestone is done, not a
+separate line of work. `feature/*` branches are short-lived, one per logical change, merged into
+`pre-release` with `--no-ff` and deleted once merged (see `docs/decisions.md` for the two
+documented exceptions where that didn't happen).
 
 ## Problem Statement
 
@@ -66,9 +78,17 @@ statuses bleed into each other is the actual engineering problem this MVP solves
 
 ## Screenshots / GIFs
 
-Not yet captured as static images — the passenger flow (signup/login, request a ride, track
-status, cancel, ride history) has been verified live in a browser (`docs/PROGRESS.md` Phase 7);
-screenshots/GIFs will be added during the documentation pass before submission (Phase 10).
+Captured live against the real running app (real backend, real MariaDB, not mocked) during the
+Phase 10 documentation pass — the exact Nusrat+Rafiq+Jashim scenario from `MASTER_PLAN.md` §5.2.
+
+| | |
+|---|---|
+| **Login** — demo credentials shown for all four cast members | **Request a ride** — Nusrat, Banani → Mohakhali |
+| ![Login](./docs/screenshots/01-login.jpg) | ![Request a ride](./docs/screenshots/02-request-ride.jpg) |
+| **Ride status** — `REQUESTED`, estimated fare ৳75.00 (matches §5.2 exactly) | **Driver console** — Jashim sees the pending pool, both passengers' est. fares |
+| ![Ride status](./docs/screenshots/03-ride-status-requested.jpg) | ![Driver pending pool](./docs/screenshots/04-driver-pending-pool.jpg) |
+| **Pool accepted** — `MATCHED`, finalized fares ৳70.50 / ৳85.50, exact digit-for-digit match to §5.2 | **Ride history** — Nusrat's ride `COMPLETED` at the same ৳70.50 |
+| ![Pool matched, fares finalized](./docs/screenshots/05-pool-matched-fares.jpg) | ![Ride history completed](./docs/screenshots/06-ride-history-completed.jpg) |
 
 ## Architecture
 
@@ -296,7 +316,28 @@ Section 6; cancellation/seat-release flow: Section 6.1.
 
 ## Deployment
 
-Not yet deployed — Phase 10/11.
+**Live.** Backend on [Render](https://render.com) (Free tier), MySQL on [Aiven](https://aiven.io)
+(Free tier), frontend on [Vercel](https://vercel.com) (Hobby/free tier) — the free-tier host
+named in `docs/decisions.md` item 6.
+
+- **Frontend:** https://dhaka-tesla-pool-mvp.vercel.app
+- **Backend:** https://dhaka-tesla-pool-mvp-1.onrender.com (`/health` → `{"status":"ok"}`)
+
+Deployed from the `pre-release` branch on both sides. The Render free instance spins down after
+inactivity, so the first request after a quiet period can take up to ~50s to wake it.
+
+Full end-to-end smoke test passed against these live URLs (not localhost): signup/login for a
+passenger and a driver, the Nusrat+Rafiq pooling flow through to fare finalization, and
+cancellation — see `docs/decisions.md` item 28 for the one deployment issue found and fixed along
+the way (Vercel's first build silently shipped from `master`, missing the dashboard-polish PR).
+
+| | |
+|---|---|
+| **Live login page** | **Live ride status — pooled fare finalized to ৳70.50** |
+| ![Live login](./docs/screenshots/live-deploy/login-live.jpg) | ![Live pool matched](./docs/screenshots/live-deploy/pool-matched-fare-live.jpg) |
+
+The Docker Compose setup remains the CI-verified (`.github/workflows/docker-verify.yml`)
+reproducible fallback for running the stack locally.
 
 ## API Overview
 
@@ -324,6 +365,14 @@ Full contract in `MASTER_PLAN.md` Section 7. Implemented so far:
 
 See [`docs/decisions.md`](./docs/decisions.md) for the running, dated log. Highlights so far:
 
+- **Git workflow exception:** 6 commits (`3c2e1f0`, `369c0c4`, `5c49f42`, `4f8e0a7`, `4065ff9`,
+  `8783816`) went directly onto `master` around 2026-09-23, bypassing a `feature/*` branch — 5 in
+  direct response to the project owner's own explicit "push to origin/master" instruction during
+  rapid CI-failure debugging, and 1 a same-fix cherry-pick applied straight to `master` to unbreak
+  CI after an external PR reintroduced an already-fixed bug. This is more than the single documented
+  exception the brief allows for, and it isn't minimized here: full reasoning per commit is in
+  `docs/decisions.md` item 27. All feature work since has gone back through `feature/*` branches
+  merged `--no-ff`.
 - Row-lock (`SELECT ... FOR UPDATE`) chosen over a distributed lock for MVP simplicity — see
   Concurrency Handling above.
 - Zone clusters are a flat, hardcoded grouping instead of real geo/distance — accuracy vs. build
@@ -332,6 +381,17 @@ See [`docs/decisions.md`](./docs/decisions.md) for the running, dated log. Highl
   cancellations — a deliberate simplification, documented as a known limitation below.
 - One-active-pool-per-Tesla invariant and new-pool Tesla-selection policy — a gap in the original
   plan, resolved and logged with rationale in `docs/decisions.md` item 7.
+- **Isolation-level bug** (`docs/decisions.md` item 26): under InnoDB's default `REPEATABLE READ`,
+  `matchRideRequest`'s very first read inside the transaction pinned a stale snapshot for the rest
+  of it — a later `SELECT ... FOR UPDATE` row-lock alone didn't fix it, since the lock doesn't
+  refresh a snapshot already taken. Two pools could form on the same Tesla under real concurrency.
+  Fixed by running `matchRideRequest` and `cancelRideRequest` under explicit `READ COMMITTED`
+  (`prisma.$transaction(fn, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted })`),
+  caught by a new CI concurrency test, not manual testing.
+- **Tailwind purge bug** (commit `a0dab8d`): `tailwind.config.js`'s `content` glob only scanned
+  `app/**`, never `components/` or `lib/` — component-only utility classes (`StatusBadge`'s status
+  colors, `NavBar`'s layout) were at risk of being silently purged from the production build.
+  Fixed by extending the glob to `components/**` and `lib/**` too.
 
 ## Known Limitations
 
@@ -366,7 +426,12 @@ See [`docs/decisions.md`](./docs/decisions.md) for the running, dated log. Highl
 
 ## AI Usage
 
-**Tools used:** Claude Code
+**Tools used:** Claude Code (primary), and a GitHub Copilot coding agent that ran once,
+independently, on `origin/copilot/fix-docker-compose-smoke-test` — it attempted the same
+isolation-level fix for the concurrent-pool-assignment bug described in `docs/decisions.md` item
+26, but that branch was never merged; the fix actually shipped came from this session's own
+independent diagnosis and fix, with Copilot's parallel attempt serving as corroboration that the
+diagnosis was right, not as the source of truth.
 
 **What for:** Phase 0 project analysis (cross-checking `MASTER_PLAN.md` for internal
 contradictions before any code was written) and drafting `docs/architecture.md`, `docs/erd.md`,
@@ -403,6 +468,41 @@ OpenSSL, which broke Prisma's schema-engine binary inside the `backend` containe
 exactly what to install). Both fixed and confirmed by a fully green CI run, including a real
 `GET /api/zones` response with all 8 seeded zones. See `docs/decisions.md` item 22.
 
-## Demo Video
+**Same day — Phase 10 security review:** the mandated "security review" pass wasn't treated as a
+formality — re-read `src/app.js` against `MASTER_PLAN.md` Section 13.4/13.5 line by line instead of
+trusting Phase 1's `[x]` marks. Found neither was real: `cors()` had no options (allows every
+origin), `helmet`/`express-rate-limit` weren't installed, and there was no request-correlation
+(`requestId`) anywhere — no `X-Request-Id` header, no request logging at all, despite the plan's
+explicit "this is what 'logging' actually wants demonstrated." Backfilled all of it and verified
+live rather than just by reading the diff: curled `/health` for security headers, sent a
+disallowed-origin request and confirmed CORS silently omitted `Access-Control-Allow-Origin`, sent
+21 rapid login attempts and confirmed the 21st got `429`, and confirmed the same `requestId`
+appears in the response header, the error JSON body, and the server's own log line. See
+`docs/decisions.md` item 23.
 
-Not yet recorded — Phase 11.
+**Same day — live deployment (2026-09-23):** deployed the backend to Render, MySQL to Aiven, and
+the frontend to Vercel, with browser automation driving all three consoles end-to-end. Caught a
+real deployment bug along the way, not just a code bug: Vercel's first import auto-selected
+`master` as the production branch before the setting was changed to `pre-release`, and a first
+look comparing only the two branches' tip commits wrongly concluded the live build was equivalent
+either way. Re-checked with the full branch diff instead of just the tip commits
+(`git diff --stat master pre-release`) and found `master` was missing PR #5's entire
+dashboard-polish rebuild (50 files, `StatusStepper`/`SeatOccupancy`/`FareDisplay`/design-system
+components) — a branch-divergence gap from `docs/decisions.md` item 27's direct-push-to-master
+incident, not a new mistake. Fixed by pushing a trigger commit to `pre-release` and re-verifying
+the live smoke test against the corrected deployment before taking this section's screenshots. See
+`docs/decisions.md` item 28.
+
+**Same day — final frontend polish pass:** three targeted UI refinements
+(`feature/ui-final-polish`, merged `--no-ff`): `StatusStepper`'s current step is now a genuinely
+different shape (larger, ringed, dot glyph), not just a different color; the driver dashboard
+gained a persistent "Active Trip" card so an accepted pool doesn't require digging through
+History to get back to; the login page's demo-credentials block became a clearly labeled,
+visually distinct panel instead of a quiet footnote. Frontend-only — verified end-to-end against a
+local dev server with real API calls (the live Render backend's CORS allowlist only permits the
+live Vercel origin, so this couldn't be checked against localhost directly) before merging, then
+re-verified live post-deploy. Full writeup: `docs/decisions.md` item 29.
+
+## Recorded Video
+
+https://youtu.be/WzC6yJBq8e0

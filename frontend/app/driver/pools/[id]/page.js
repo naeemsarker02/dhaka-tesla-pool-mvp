@@ -5,6 +5,9 @@ import { useParams } from "next/navigation";
 import { RequireAuth } from "../../../../components/RequireAuth";
 import { NavBar } from "../../../../components/NavBar";
 import { StatusBadge } from "../../../../components/StatusBadge";
+import { StatusStepper } from "../../../../components/StatusStepper";
+import { ErrorBanner } from "../../../../components/ErrorBanner";
+import { CardSkeleton } from "../../../../components/Skeleton";
 import { useAuth } from "../../../../lib/AuthContext";
 import { apiFetch, ApiError } from "../../../../lib/api";
 import { formatPaisa } from "../../../../lib/format";
@@ -16,6 +19,12 @@ const NEXT_STATUS = {
   MATCHED: "DRIVER_ARRIVED",
   DRIVER_ARRIVED: "STARTED",
   STARTED: "COMPLETED",
+};
+
+const NEXT_ACTION_LABEL = {
+  DRIVER_ARRIVED: "I've arrived",
+  STARTED: "Start trip",
+  COMPLETED: "Complete trip",
 };
 
 export default function PoolDetailPage() {
@@ -70,44 +79,45 @@ function PoolDetail() {
     }
   }
 
+  const nextStatus = pool && NEXT_STATUS[pool.status];
+
   return (
-    <main className="mx-auto max-w-2xl px-6 py-10">
-      <h1 className="mb-6 text-2xl font-semibold">Pool details</h1>
+    <main className="mx-auto max-w-2xl px-4 py-8 sm:px-6 sm:py-10">
+      <h1 className="mb-6 text-xl font-semibold text-slate-900">Pool details</h1>
 
-      {error && (
-        <p role="alert" className="rounded bg-red-50 px-3 py-2 text-sm text-red-700">
-          {error}
-        </p>
-      )}
+      {error && <ErrorBanner>{error}</ErrorBanner>}
 
-      {!pool && !error && <p className="text-slate-500">Loading…</p>}
+      {!pool && !error && <CardSkeleton lines={4} />}
 
       {pool && (
         <div className="space-y-4">
-          <div className="flex items-center justify-between rounded border border-slate-200 bg-white p-4">
-            <div>
-              <p className="font-medium">{pool.seatsOccupied} seat(s) occupied</p>
-              <p className="text-sm text-slate-500">
-                Created {new Date(pool.createdAt).toLocaleString()}
-              </p>
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="font-medium text-slate-900">{pool.seatsOccupied} seat(s) occupied</p>
+                <p className="text-xs text-slate-400">Created {new Date(pool.createdAt).toLocaleString()}</p>
+              </div>
+              <StatusBadge status={pool.status} />
             </div>
-            <StatusBadge status={pool.status} />
+            <StatusStepper status={pool.status} />
           </div>
 
-          <div className="rounded border border-slate-200 bg-white p-4">
-            <h2 className="mb-3 font-semibold">Passengers</h2>
-            <ul className="space-y-2 text-sm">
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">
+              Passengers
+            </h2>
+            <ul className="divide-y divide-slate-100">
               {pool.memberships.map((m) => (
-                <li key={m.id} className="flex items-center justify-between border-b border-slate-100 pb-2 last:border-0">
-                  <div>
-                    <p>
-                      {m.rideRequest.pickupZone.name} → {m.rideRequest.destinationZone.name} ·{" "}
-                      {m.seats} seat{m.seats === 1 ? "" : "s"}
+                <li key={m.id} className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-slate-900">
+                      {m.rideRequest.pickupZone.name} → {m.rideRequest.destinationZone.name}
                     </p>
-                    <p className="text-slate-500">
+                    <p className="text-sm text-slate-500">
+                      {m.seats} seat{m.seats === 1 ? "" : "s"} ·{" "}
                       {m.rideRequest.farePaisa === null
-                        ? `Estimated ${formatPaisa(m.rideRequest.estimatedFarePaisa)}`
-                        : `Fare ${formatPaisa(m.rideRequest.farePaisa)}`}
+                        ? `Est. ${formatPaisa(m.rideRequest.estimatedFarePaisa)}`
+                        : formatPaisa(m.rideRequest.farePaisa)}
                     </p>
                   </div>
                   <StatusBadge status={m.rideRequest.status} />
@@ -116,20 +126,16 @@ function PoolDetail() {
             </ul>
           </div>
 
-          {actionError && (
-            <p role="alert" className="rounded bg-red-50 px-3 py-2 text-sm text-red-700">
-              {actionError}
-            </p>
-          )}
+          {actionError && <ErrorBanner>{actionError}</ErrorBanner>}
 
-          {NEXT_STATUS[pool.status] && (
+          {nextStatus && (
             <button
               type="button"
               onClick={handleAdvance}
               disabled={isAdvancing}
-              className="w-full rounded bg-slate-900 px-4 py-2 text-white disabled:opacity-50"
+              className="sticky bottom-4 w-full rounded-xl bg-slate-900 px-4 py-3.5 text-sm font-semibold text-white shadow-lg transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {isAdvancing ? "Updating…" : `Mark as ${NEXT_STATUS[pool.status]}`}
+              {isAdvancing ? "Updating…" : NEXT_ACTION_LABEL[nextStatus]}
             </button>
           )}
         </div>

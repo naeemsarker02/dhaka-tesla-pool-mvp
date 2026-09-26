@@ -44,6 +44,48 @@ jobs:
           curl -sf http://localhost:4000/api/zones | head -c 500
           echo
 
+      # This CI run is real mysql:8, not the MariaDB 10.4 used for local development
+      # (docs/decisions.md item 13) — but until now nothing in this workflow actually exercised
+      # the concurrency-critical `SELECT ... FOR UPDATE` row-lock path (matchingService.js /
+      # rideService.js), only plain reads. This step closes that gap: it pools Nusrat and Rafiq
+      # onto the same Tesla concurrently, the exact MASTER_PLAN.md Section 5.2 scenario, which
+      # only succeeds if the row-locked seat-claim code actually works against real MySQL 8.
+      - name: Exercise pooling + row-locked seat claim against real MySQL 8
+        if: always()
+        run: |
+          set -e
+          BANANI=$(curl -sf http://localhost:4000/api/zones | jq -r '.[] | select(.name=="Banani") | .id')
+          MOHAKHALI=$(curl -sf http://localhost:4000/api/zones | jq -r '.[] | select(.name=="Mohakhali") | .id')
+          GULSHAN=$(curl -sf http://localhost:4000/api/zones | jq -r '.[] | select(.name=="Gulshan") | .id')
+
+          NUSRAT_TOKEN=$(curl -sf -X POST http://localhost:4000/api/auth/login -H "Content-Type: application/json" -d '{"email":"nusrat@dhakateslapool.test","password":"password123"}' | jq -r '.token')
+          RAFIQ_TOKEN=$(curl -sf -X POST http://localhost:4000/api/auth/login -H "Content-Type: application/json" -d '{"email":"rafiq@dhakateslapool.test","password":"password123"}' | jq -r '.token')
+          JASHIM_TOKEN=$(curl -sf -X POST http://localhost:4000/api/auth/login -H "Content-Type: application/json" -d '{"email":"jashim@dhakateslapool.test","password":"password123"}' | jq -r '.token')
+
+          echo "Requesting Nusrat + Rafiq rides concurrently..."
+          curl -sf -X POST http://localhost:4000/api/rides -H "Authorization: Bearer $NUSRAT_TOKEN" -H "Content-Type: application/json" -d "{\"pickupZoneId\":\"$BANANI\",\"destinationZoneId\":\"$MOHAKHALI\",\"seatsRequested\":1}" > /tmp/nusrat.json &
+          curl -sf -X POST http://localhost:4000/api/rides -H "Authorization: Bearer $RAFIQ_TOKEN" -H "Content-Type: application/json" -d "{\"pickupZoneId\":\"$BANANI\",\"destinationZoneId\":\"$GULSHAN\",\"seatsRequested\":1}" > /tmp/rafiq.json &
+          wait
+
+          echo "Nusrat's ride:"; cat /tmp/nusrat.json; echo
+          echo "Rafiq's ride:"; cat /tmp/rafiq.json; echo
+
+          NUSRAT_STATUS=$(jq -r '.status' /tmp/nusrat.json)
+          RAFIQ_STATUS=$(jq -r '.status' /tmp/rafiq.json)
+          if [ "$NUSRAT_STATUS" != "REQUESTED" ] || [ "$RAFIQ_STATUS" != "REQUESTED" ]; then
+            echo "Ride creation failed (expected both REQUESTED)."; exit 1
+          fi
+
+          echo "Checking Jashim's driver console shows them pooled together..."
+          POOLS=$(curl -sf http://localhost:4000/api/driver/requests -H "Authorization: Bearer $JASHIM_TOKEN")
+          echo "$POOLS"
+          SEATS=$(echo "$POOLS" | jq -r '.[0].seatsOccupied // empty')
+          if [ "$SEATS" != "2" ]; then
+            echo "Expected a pool with 2 seats occupied (row-locked seat claim), got: '$SEATS'"
+            exit 1
+          fi
+          echo "Pooling + SELECT ... FOR UPDATE row-locked seat claim confirmed working against real MySQL 8."
+
       - name: Show container logs (always, for diagnosing failures)
         if: always()
         run: docker compose logs

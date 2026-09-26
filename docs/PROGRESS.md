@@ -793,3 +793,268 @@ this section accordingly.
 **Next task:** Phase 10 — pre-release stabilization (full test pass together, docs review,
 screenshots, then cut `pre-release`). Phase 11 (6-minute video + `release/v1.0.0`) needs the
 project owner's own recording — out of scope for an automated session.
+
+---
+
+## Phase 10 — `pre-release` (cut from `master` at `4f8e0a7`)
+
+**Status:** Complete except deployment (needs real hosting credentials) and the video (Phase 11,
+needs the project owner).
+
+**What was implemented:**
+- **Full test pass:** `npm test` 68/68, `npm run test:integration` 1/1, re-run after every change
+  this phase to confirm nothing regressed.
+- **Security review found a real gap, same failure mode as the Phase 3/6/9 backfills:**
+  `MASTER_PLAN.md` Section 13.4 (request correlation)/13.5 (security baseline) were marked `[x]`
+  in Phase 1's checklist but neither was actually built. `app.js` had a bare `cors()` (allows every
+  origin), `helmet`/`express-rate-limit` weren't even installed, and there was no `requestId`
+  anywhere in the codebase — no `X-Request-Id` header, no request logging at all. Fixed:
+  `src/middleware/authRateLimit.js` (20 req/15min on `/api/auth/*` only),
+  `src/middleware/requestContext.js` (`crypto.randomUUID()` per request, `X-Request-Id` header,
+  logged on every request/error), `helmet()` + `cors({ origin: corsOrigins })` with a new
+  `CORS_ORIGIN` env var. Verified live: security headers present, CORS correctly rejects a
+  disallowed origin, the 21st rapid login attempt returns 429, `X-Request-Id` matches across the
+  response header, error body, and server log line. Full account: `docs/decisions.md` item 23.
+- **Screenshots:** 6 live screenshots captured against the real running app (real backend, real
+  MariaDB — not staged) walking through the exact Nusrat/Rafiq/Jashim §5.2 scenario: login,
+  request-ride form, ride status (`REQUESTED`, est. fare ৳75.00), driver console (pending pool with
+  both passengers' est. fares), accepted pool (`MATCHED`, finalized fares ৳70.50/৳85.50 — exact
+  digit match to §5.2), and ride history (`COMPLETED` at the same ৳70.50). Test data cleaned up
+  afterward (ride requests, pool, memberships, status history deleted directly via Prisma — cancel
+  can't remove a `COMPLETED` ride, so this was a direct DB cleanup, not an API call) to restore the
+  clean seed state.
+- **README pass:** Deployment section rewritten to honestly state why no public deployment exists
+  (creating a hosting-provider account is outside what this session can do) and point at the
+  CI-verified Docker Compose setup as the documented fallback, per `docs/decisions.md` item 6's own
+  original wording.
+- `pre-release` branch cut from `master` at `4f8e0a7`, pushed to `origin/pre-release`.
+
+**Files changed:** `backend/src/app.js`, `backend/src/middleware/{authRateLimit,requestContext}.js`
+(new), `backend/src/middleware/errorHandler.js`, `backend/.env.example`, `backend/package.json`,
+`docker-compose.yml`, `README.md`, `docs/screenshots/*.jpg` (new), `docs/decisions.md` (item 23),
+`MASTER_PLAN.md` (Phase 1/10 status corrections).
+
+**Tests passed/failed:** `npm test` → 68/68. `npm run test:integration` → 1/1. CI
+(`docker-verify.yml`) → green on the `pre-release` branch after the security-middleware push.
+
+**Known issues / unresolved:**
+- No public deployment — needs the project owner's own free-tier hosting account (Railway/
+  PlanetScale/Aiven + Vercel, per `MASTER_PLAN.md` §1), which this session cannot create.
+- Video (Phase 11) needs the project owner to record it.
+
+**Next task:** Phase 11 — record the 6-minute video, cut `release/v1.0.0` from `pre-release`, final
+polish. Needs the project owner.
+
+---
+
+## Phase 11 — Live deployment
+
+**Status:** Complete.
+
+**What was implemented:** Backend deployed to Render (Free tier, `pre-release` branch, root
+`backend/`), MySQL provisioned on Aiven (Free tier, new `dhaka_tesla_pool` database created
+alongside the account's other projects), frontend deployed to Vercel (Hobby/free tier). Full live
+smoke test (signup/login, Nusrat+Rafiq pooling through to fare finalization at ৳70.50/৳85.50,
+cancellation) passed against the real deployed URLs.
+
+**Bug found and fixed during deployment:** Vercel's first import auto-selected `master` as the
+production branch. Changing the branch-tracking setting to `pre-release` afterward did not
+retroactively rebuild the site — the live build kept serving `master`, which was missing PR #5's
+entire dashboard-polish rebuild (a branch-divergence gap already documented in
+`docs/decisions.md` item 27, not a new one). Fixed by pushing a trigger commit to `pre-release`
+and re-verifying the new UI was actually live before taking README screenshots. Full writeup:
+`docs/decisions.md` item 28.
+
+**Files changed:** `README.md` (Deployment, Key Decisions, AI Usage sections),
+`docs/decisions.md` (item 28), `docs/screenshots/live-deploy/*.jpg` (new).
+
+**Tests passed/failed:** Live smoke test only (signup, login, pooling, fare finalization,
+cancellation) — no code changes in this phase, so the existing `npm test` / CI suite is
+unaffected.
+
+**Documentation updated:** `README.md`, `docs/decisions.md`, this file.
+
+**Known issues:** None outstanding for deployment. Video (Phase 11's other deliverable) still
+needs the project owner to record it.
+
+**Next task:** Cut `release/v1.0.0` from `pre-release`. Record the demo video.
+
+---
+
+## Phase 10.5 — Full Section 13/6.2 re-audit (2026-09-23)
+
+**Status:** Complete. Triggered by the project owner after three separate "marked complete, not
+actually built" misses (Phase 3's Section 13.1/13.2/13.6, Phase 6's Section 6.2, Phase 1's Section
+13.4/13.5) — a request to re-verify every remaining Section 13/6.2 item by reading the actual code,
+not trusting the checklist, plus a bonus finding: after this write-up was committed, CI on `master`
+(after the project owner's own PR merge) caught a fourth real bug — see the `docker-entrypoint.sh`
+retry-loop fix (commit `19d55ec`/`8783816`, `docs/decisions.md` item 24) — a MySQL-container
+temp-server-restart race that only a live `docker compose up` run could have caught.
+
+**Audit results — pass/fail per item, with what was actually checked:**
+
+| Item | Result | What was checked |
+|---|---|---|
+| 13.1 Idempotency-Key dedup | **PASS** | `rideService.createRideRequest` — up-front lookup by `(passengerId, idempotencyKey)`, plus a `P2002`-race fallback. Read in full. |
+| 13.2 One active ride per passenger | **PASS** | Same file — `ACTIVE_RIDE_STATUSES` check before zone validation. Read in full. |
+| 13.3 Stale-pool policy documented | **PASS** | `README.md` Known Limitations states it explicitly as a deliberate non-implementation. Grepped. |
+| 13.4 Centralized error envelope + request correlation | **PASS** | `src/app.js` — `requestContext`/`requestLogger` are app-level (not per-router); all 5 controller files / 15 route handlers use `try/catch -> next(err)`; `validateBody` and auth middleware both go through `next(new AppError(...))`. Read every controller file and both middleware files in full. **Gap found:** no regression test existed — fixed, see below. |
+| 13.5 Security baseline (helmet/CORS/rate-limit) | **PASS** | Same read as above — `helmet()`/`cors()` are global; `authRateLimiter` is scoped to `/api/auth` only (correct, not "forgotten" — it's intentionally auth-only per the plan). **Gap found:** no regression test existed — fixed, see below. |
+| 13.6 `seatsRequested` bounds 1..3 | **PASS** | `src/validators/ride.js` — `.min(1).max(3)`. Read in full. |
+| 6.2 Grace-window cancellation | **PASS** | `rideService.cancelRideRequest` — `lateCancellation`/`cancellationFeePaisa` computed from `rideRequest.matchedAt` vs `GRACE_WINDOW_SECONDS`. Read in full. |
+| Two separate, unconflated state machines | **PASS** | `prisma/schema.prisma` — `RideRequestStatus`/`PoolStatus` are separate enums; `src/lib/stateMachine.js` — `RIDE_REQUEST_TRANSITIONS`/`POOL_TRANSITIONS` are separate tables, used independently. Read both files. |
+| No `pool_id` column on `ride_requests` | **PASS** | `prisma/schema.prisma` — `RideRequest` model has no such field; `PoolMembership.rideRequestId` is the sole, `@unique` link. Read in full. |
+| Tesla `driver_id` UNIQUE | **PASS** | `prisma/schema.prisma` — `@unique`; `teslaService.registerTesla` also pre-checks and catches `P2002`. Read in full. |
+| MariaDB-vs-MySQL-8 (raw SQL) | **PASS** | Grepped every `$queryRaw`/`$executeRaw` call site and all 5 migration files — no MariaDB-specific syntax anywhere (standard `SELECT ... FOR UPDATE`/`UPDATE ... SET`, standard DDL). |
+| MariaDB-vs-MySQL-8 (concurrency path exercised in CI) | **GAP FOUND, FIXED — AND THE FIX FOUND A REAL BUG** | `docker-verify.yml`'s smoke test only ever called `GET /health`/`GET /api/zones` — the row-locked seat-claim path had never run against real MySQL 8 in CI, only against MariaDB locally (`npm run test:integration`). Extended the workflow with a step that pools Nusrat+Rafiq concurrently — **its first run failed**: both landed in separate `OPEN` pools on the same Tesla, a genuine violation of the "one active pool per Tesla" invariant that had never been caught before. See `docs/decisions.md` item 26 for the full root-cause account and fix. |
+
+**What was fixed this pass:**
+- `backend/tests/security.test.js` (new, 7 cases) — regression coverage for the Section 13.4/13.5
+  backfill that previously had none: helmet headers, CORS allowlist (both allowed and disallowed
+  origins), `X-Request-Id` presence/matching/uniqueness, and the auth-only 429 rate limit.
+- `.github/workflows/docker-verify.yml` — new step exercising the `SELECT ... FOR UPDATE` pooling
+  path against real MySQL 8 (previously only reads were exercised).
+- **A real concurrency bug** (`docs/decisions.md` item 26): `matchingService.matchRideRequest` ran
+  under MySQL's default `REPEATABLE READ` isolation, which pinned the transaction's read snapshot
+  at a plain (non-locking) read *before* the `FOR UPDATE` tesla lock was acquired — so the
+  "does this Tesla already have an active pool" check could still see stale pre-lock data even
+  after successfully waiting on the lock, letting two concurrent first-time ride requests both
+  create a pool on the same Tesla. Fixed by running that transaction (and
+  `rideService.cancelRideRequest`'s, same structural pattern) under `ReadCommitted` isolation
+  instead. A related efficiency gap surfaced by the fix (the loser of the Tesla race fell all the
+  way through to unpooled instead of joining the winner's new pool) was fixed alongside it —
+  `matchRideRequest` now retries the compatible-pool search once before giving up.
+- `docs/decisions.md` items 25–26 — full account of the audit, the gaps, and the bug.
+
+**Tests passed/failed:** `npm test` → 76/76 (68 + 8 new — 7 security + 1 new mocked matching-retry
+case). `npm run test:integration` → 2/2 (the existing seat-claim race, plus a new one: two
+brand-new concurrent requests for the same idle Tesla now correctly land in exactly one pool),
+confirmed deterministic across 5 consecutive local runs against MariaDB. CI (`docker-verify.yml`)
+→ to be confirmed green against real MySQL 8 on this push.
+
+**Known issues / unresolved:** none found beyond the items above, all fixed.
+
+**Next task:** Phase 11 — record the 6-minute video, cut `release/v1.0.0` from `pre-release`.
+Deployment is on hold — the project owner will decide the hosting approach (or confirm the
+CI-verified Docker fallback) rather than this session choosing unilaterally.
+
+---
+
+## Phase 10.6 — Raw-brief cross-check (2026-09-23)
+
+**Status:** Complete. Requested by the project owner as a check against the RoBenDevs brief's own
+words (not `MASTER_PLAN.md` reviewed against itself). Full account: `docs/decisions.md` item 27.
+
+**Results:**
+- Section 3 (actor capabilities) — **PASS**, every capability has a real endpoint + real frontend
+  page, verified by reading all 8 page files and grepping their `apiFetch` call sites.
+- Section 5 (fare model) — **PASS**, re-run live (not trusted from history): Nusrat/Rafiq's
+  ৳70.50/৳85.50 reproduced exactly against the real backend + MariaDB. Found and cleaned up
+  accumulated stray test data along the way (a non-seed "Roton Mia"/"Dragoon" driver account left
+  `ONLINE`, intercepting matches ahead of Jashim's `Bullet` — restored to the state found, not
+  deleted, since it isn't this session's data).
+- Section 12 (testing list) — **PASS**, one real gap closed: `cancelRideRequest`'s `ReadCommitted`
+  fix (item 26) had no concurrency test proving it. Added one — two members of the same pool
+  cancelling simultaneously now provably ends with the pool `CANCELLED`, not orphaned. 5/5
+  deterministic runs.
+- Section 16 — secrets: **PASS** (full `git log --all -p` grep, entire history). Giant commit:
+  **PASS** (largest commit is 75% `package-lock.json`). Story cast: **PASS** (no `user1`/`driver1`
+  anywhere real). **"No direct pushes to master" — FAIL, found and reported.** 6 commits went
+  directly onto `master` during the Docker/CI debugging session, 5 of them per the project owner's
+  own explicit "push to origin/master" instruction at the time. Not hidden, not rewritten — logged
+  honestly in `docs/decisions.md` item 27, with the fix going forward being to keep even CI-only
+  work on a feature branch (starting with this session's Part 2 frontend work).
+- Open question (`Pool.status` including `MATCHED`) — **resolved, no rename.** The stale
+  instruction predates `MASTER_PLAN.md`'s own Rev 2 correction and has no live representation
+  anywhere to actually conflict with the shipped, tested, two-enum design.
+
+**Tests passed/failed:** `npm test` → 76/76. `npm run test:integration` → 3/3 (2 existing + 1 new
+cancellation-race test), 5/5 deterministic local runs.
+
+**Documentation updated:** `docs/decisions.md` item 27.
+
+**Next task:** Part 2 of this pass — frontend/dashboard visual and UX polish, on a feature branch.
+
+---
+
+## Phase 10.7 — Ride-status header polish (2026-09-24)
+
+**Status:** Complete — `feature/ride-status-pool-badge` merged `--no-ff` into `pre-release`.
+
+**What was implemented:** The passenger ride-detail page (`/rides/[id]`) showed the
+`StatusStepper` for `ride_request.status` alone, with no status badge in the header — visually
+inconsistent with the driver's pool-detail page, which pairs its header (seats/created-at) with a
+`StatusBadge` next to the stepper. Added the same `StatusBadge status={ride.status}` next to the
+pickup/destination header on the ride page so both role's status cards read as one visual pattern.
+No change to the underlying state machines — the ride page still tracks `ride_request.status`
+only, per the `RideRequest.status` / `Pool.status` separation in `MASTER_PLAN.md` — this was a
+visual-consistency fix, not a data-source change.
+
+**Files changed:** `frontend/app/rides/[id]/page.js`.
+
+**Tests added:** none (visual-only change, no logic touched).
+
+**Tests passed/failed:** `npm run build` (frontend) → compiled and generated all 10 routes
+successfully.
+
+**Documentation updated:** `docs/PROGRESS.md` (this entry).
+
+**Known issues:** none.
+
+**Next task:** confirm with the project owner before pushing `pre-release` to the deploy remote.
+
+---
+
+## Phase 10.8 — StatusStepper connector-line alignment fix (2026-09-25)
+
+**Status:** Complete — `feature/ride-status-stepper-alignment` merged `--no-ff` into `pre-release`.
+
+**What was implemented:** The passenger ride-status stepper (`StatusStepper`, shared by both the
+passenger ride view and driver pool view) rendered its connecting line as a sibling of a
+`flex-col` circle+label block inside a `flex items-center` `<li>`. That centered the line against
+the whole item's height (circle + label text), not the circle itself — visibly offset, and worse
+for the current step since its circle is larger (`h-9` vs `h-7`). Restructured each step so the
+circle and its connecting line share their own `flex items-center` row, separate from the label
+below; the line now always aligns to the circle's true vertical center regardless of circle size
+or label presence. Purely visual — no change to `LIFECYCLE_STEPS`, status data, or either state
+machine.
+
+**Files changed:** `frontend/components/StatusStepper.js`.
+
+**Tests added:** none (visual-only change, no logic touched).
+
+**Tests passed/failed:** `npm run build` (frontend) → compiled and generated all 10 routes
+successfully.
+
+**Documentation updated:** `docs/PROGRESS.md` (this entry).
+
+**Known issues:** none.
+
+**Next task:** none pending.
+
+---
+
+## Phase 11 — Demo video link + README audit fixes (2026-09-27)
+
+**Status:** Complete — committed directly to `pre-release` (small docs-only fixes from a
+requirements audit; no feature branch per item, at the project owner's direction).
+
+**What was implemented:** A full requirements audit against the raw RoBenDevs PRD found the
+6-minute demo video was still unrecorded (README said "Not yet recorded — Phase 11") and two
+disclosure gaps in the README. The video has now been recorded and published
+(`https://youtu.be/WzC6yJBq8e0`); added the link near the top of `README.md` (right after the
+Summary) and filled in the previously-placeholder `## Demo Video` section. `docs/PROGRESS.md`
+(this entry) marks Phase 11's video deliverable complete instead of outstanding.
+
+**Files changed:** `README.md`, `docs/PROGRESS.md`.
+
+**Tests added:** N/A (documentation-only).
+
+**Tests passed/failed:** N/A.
+
+**Documentation updated:** `README.md` (Summary section + Demo Video section).
+
+**Known issues:** none.
+
+**Next task:** disclose the 6 direct-to-master commits and the Copilot coding-agent branch in
+README (same audit pass, separate commits).

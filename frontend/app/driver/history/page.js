@@ -5,6 +5,9 @@ import Link from "next/link";
 import { RequireAuth } from "../../../components/RequireAuth";
 import { NavBar } from "../../../components/NavBar";
 import { StatusBadge } from "../../../components/StatusBadge";
+import { ErrorBanner } from "../../../components/ErrorBanner";
+import { EmptyState } from "../../../components/EmptyState";
+import { ListSkeleton } from "../../../components/Skeleton";
 import { useAuth } from "../../../lib/AuthContext";
 import { apiFetch, ApiError } from "../../../lib/api";
 
@@ -29,29 +32,30 @@ function DriverHistory() {
   }, [token]);
 
   return (
-    <main className="mx-auto max-w-2xl px-6 py-10">
-      <h1 className="mb-6 text-2xl font-semibold">Trip history</h1>
+    <main className="mx-auto max-w-2xl px-4 py-8 sm:px-6 sm:py-10">
+      <h1 className="mb-6 text-xl font-semibold text-slate-900">Trip history</h1>
 
-      {error && (
-        <p role="alert" className="rounded bg-red-50 px-3 py-2 text-sm text-red-700">
-          {error}
-        </p>
+      {error && <ErrorBanner>{error}</ErrorBanner>}
+
+      {!pools && !error && <ListSkeleton />}
+
+      {pools && pools.length === 0 && (
+        <EmptyState
+          title="No trips yet"
+          description="Accepted pools will show up here once you've driven them."
+        />
       )}
 
-      {!pools && !error && <p className="text-slate-500">Loading…</p>}
-
-      {pools && pools.length === 0 && <p className="text-slate-500">No trips yet.</p>}
-
       {pools && pools.length > 0 && (
-        <ul className="space-y-3">
+        <ul className="space-y-2.5">
           {pools.map((pool) => (
             <li key={pool.id}>
               <Link
                 href={`/driver/pools/${pool.id}`}
-                className="flex items-center justify-between rounded border border-slate-200 bg-white px-4 py-3 hover:border-slate-400"
+                className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3.5 shadow-sm transition hover:border-slate-300 hover:shadow"
               >
-                <div>
-                  <p className="font-medium">
+                <div className="min-w-0">
+                  <p className="truncate font-medium text-slate-900">
                     {pool.memberships
                       .map((m) => `${m.rideRequest.pickupZone.name} → ${m.rideRequest.destinationZone.name}`)
                       .join(", ")}

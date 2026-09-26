@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { RequireAuth } from "../../../components/RequireAuth";
 import { NavBar } from "../../../components/NavBar";
+import { ErrorBanner } from "../../../components/ErrorBanner";
+import { EmptyState } from "../../../components/EmptyState";
 import { useAuth } from "../../../lib/AuthContext";
 import { apiFetch, ApiError } from "../../../lib/api";
 
@@ -15,6 +17,9 @@ export default function NewRidePage() {
     </RequireAuth>
   );
 }
+
+const selectClass =
+  "mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm transition focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500";
 
 function NewRideForm() {
   const { token } = useAuth();
@@ -59,29 +64,35 @@ function NewRideForm() {
   }
 
   return (
-    <main className="mx-auto max-w-md px-6 py-10">
-      <h1 className="mb-6 text-2xl font-semibold">Request a ride</h1>
+    <main className="mx-auto max-w-md px-4 py-8 sm:px-6 sm:py-10">
+      <h1 className="mb-1 text-xl font-semibold text-slate-900">Request a ride</h1>
+      <p className="mb-6 text-sm text-slate-500">Pick your route — we'll show the estimated fare instantly.</p>
 
-      {zonesError && (
-        <p role="alert" className="rounded bg-red-50 px-3 py-2 text-sm text-red-700">
-          {zonesError}
-        </p>
+      {zonesError && <ErrorBanner>{zonesError}</ErrorBanner>}
+
+      {!zones && !zonesError && (
+        <div className="animate-pulse space-y-4 rounded-2xl border border-slate-200 bg-white p-6">
+          <div className="h-9 rounded-lg bg-slate-100" />
+          <div className="h-9 rounded-lg bg-slate-100" />
+          <div className="h-9 rounded-lg bg-slate-100" />
+        </div>
       )}
 
-      {!zones && !zonesError && <p className="text-slate-500">Loading zones…</p>}
-
       {zones && zones.length === 0 && (
-        <p className="text-slate-500">No zones are available yet. Please check back later.</p>
+        <EmptyState title="No zones available" description="Please check back later." />
       )}
 
       {zones && zones.length > 0 && (
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form
+          onSubmit={handleSubmit}
+          className="space-y-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm"
+        >
           <div>
             <label className="block text-sm font-medium text-slate-700">Pickup zone</label>
             <select
               value={pickupZoneId}
               onChange={(e) => setPickupZoneId(e.target.value)}
-              className="mt-1 w-full rounded border border-slate-300 px-3 py-2"
+              className={selectClass}
             >
               {zones.map((zone) => (
                 <option key={zone.id} value={zone.id}>
@@ -96,7 +107,7 @@ function NewRideForm() {
             <select
               value={destinationZoneId}
               onChange={(e) => setDestinationZoneId(e.target.value)}
-              className="mt-1 w-full rounded border border-slate-300 px-3 py-2"
+              className={selectClass}
             >
               {zones.map((zone) => (
                 <option key={zone.id} value={zone.id}>
@@ -114,26 +125,23 @@ function NewRideForm() {
               max={3}
               value={seatsRequested}
               onChange={(e) => setSeatsRequested(e.target.value)}
-              className="mt-1 w-full rounded border border-slate-300 px-3 py-2"
+              className={selectClass}
             />
           </div>
 
-          {submitError && (
-            <p role="alert" className="rounded bg-red-50 px-3 py-2 text-sm text-red-700">
-              {submitError}
-            </p>
+          {submitError && <ErrorBanner>{submitError}</ErrorBanner>}
+
+          {pickupZoneId === destinationZoneId && (
+            <p className="text-xs font-medium text-red-600">Pickup and destination must be different zones.</p>
           )}
 
           <button
             type="submit"
             disabled={isSubmitting || pickupZoneId === destinationZoneId}
-            className="w-full rounded bg-slate-900 px-4 py-2 text-white disabled:opacity-50"
+            className="w-full rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {isSubmitting ? "Requesting…" : "Request ride"}
           </button>
-          {pickupZoneId === destinationZoneId && (
-            <p className="text-xs text-red-600">Pickup and destination must be different zones.</p>
-          )}
         </form>
       )}
     </main>
