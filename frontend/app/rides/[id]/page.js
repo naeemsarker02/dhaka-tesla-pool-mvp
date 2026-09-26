@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { RequireAuth } from "../../../components/RequireAuth";
 import { NavBar } from "../../../components/NavBar";
+import { StatusBadge } from "../../../components/StatusBadge";
 import { StatusStepper } from "../../../components/StatusStepper";
 import { FareDisplay } from "../../../components/FareDisplay";
 import { ErrorBanner } from "../../../components/ErrorBanner";
@@ -87,11 +88,14 @@ function RideDetail() {
 
       {ride && (
         <div className="space-y-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-          <div>
-            <p className="text-lg font-medium text-slate-900">
-              {ride.pickupZone.name} → {ride.destinationZone.name}
-            </p>
-            <p className="text-sm text-slate-500">{ride.seatsRequested} seat(s)</p>
+          <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="text-lg font-medium text-slate-900">
+                {ride.pickupZone.name} → {ride.destinationZone.name}
+              </p>
+              <p className="text-sm text-slate-500">{ride.seatsRequested} seat(s)</p>
+            </div>
+            <StatusBadge status={ride.status} />
           </div>
 
           <StatusStepper status={ride.status} />

@@ -1,3 +1,7 @@
+// Signup/login for all three roles (passenger, driver, admin-free MVP). Key invariant: the JWT
+// payload stays minimal (id + role only, never email/name/PII, per CLAUDE.md), and passwords are
+// never stored or returned in plain text — bcrypt-hashed on write, compared (never decrypted) on
+// login, and stripped out of every response via toPublicUser.
 const bcrypt = require("bcrypt");
 const { prisma } = require("../lib/prisma");
 const { signToken } = require("../lib/jwt");

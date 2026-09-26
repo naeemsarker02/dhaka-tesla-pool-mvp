@@ -1,3 +1,8 @@
+// Registering and managing a driver's own Tesla: one-time registration, online/offline toggle, and
+// self-lookup. Key invariant: teslas.driver_id is UNIQUE (one Tesla per driver, an explicit MVP
+// assumption — no multi-Tesla fleets), enforced at the DB level and mirrored here for a clean 409
+// instead of a raw constraint error; every write also checks driverId ownership of the specific
+// Tesla being changed, never just role.
 const { Prisma } = require("@prisma/client");
 const { prisma } = require("../lib/prisma");
 const { ConflictError, ForbiddenError, ValidationError } = require("../lib/errors");

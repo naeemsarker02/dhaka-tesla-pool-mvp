@@ -1,5 +1,7 @@
 # Dhaka Tesla Pool
 
+▶️ **[Watch the 8-minute demo video](https://youtu.be/WzC6yJBq8e0)**
+
 ## Summary
 
 A ride-pooling MVP built for the RoBenDevs Software Engineer assessment. Passengers request rides
@@ -353,6 +355,14 @@ Full contract in `MASTER_PLAN.md` Section 7. Implemented so far:
 
 See [`docs/decisions.md`](./docs/decisions.md) for the running, dated log. Highlights so far:
 
+- **Git workflow exception:** 6 commits (`3c2e1f0`, `369c0c4`, `5c49f42`, `4f8e0a7`, `4065ff9`,
+  `8783816`) went directly onto `master` around 2026-09-23, bypassing a `feature/*` branch — 5 in
+  direct response to the project owner's own explicit "push to origin/master" instruction during
+  rapid CI-failure debugging, and 1 a same-fix cherry-pick applied straight to `master` to unbreak
+  CI after an external PR reintroduced an already-fixed bug. This is more than the single documented
+  exception the brief allows for, and it isn't minimized here: full reasoning per commit is in
+  `docs/decisions.md` item 27. All feature work since has gone back through `feature/*` branches
+  merged `--no-ff`.
 - Row-lock (`SELECT ... FOR UPDATE`) chosen over a distributed lock for MVP simplicity — see
   Concurrency Handling above.
 - Zone clusters are a flat, hardcoded grouping instead of real geo/distance — accuracy vs. build
@@ -406,7 +416,12 @@ See [`docs/decisions.md`](./docs/decisions.md) for the running, dated log. Highl
 
 ## AI Usage
 
-**Tools used:** Claude Code
+**Tools used:** Claude Code (primary), and a GitHub Copilot coding agent that ran once,
+independently, on `origin/copilot/fix-docker-compose-smoke-test` — it attempted the same
+isolation-level fix for the concurrent-pool-assignment bug described in `docs/decisions.md` item
+26, but that branch was never merged; the fix actually shipped came from this session's own
+independent diagnosis and fix, with Copilot's parallel attempt serving as corroboration that the
+diagnosis was right, not as the source of truth.
 
 **What for:** Phase 0 project analysis (cross-checking `MASTER_PLAN.md` for internal
 contradictions before any code was written) and drafting `docs/architecture.md`, `docs/erd.md`,
@@ -478,6 +493,6 @@ local dev server with real API calls (the live Render backend's CORS allowlist o
 live Vercel origin, so this couldn't be checked against localhost directly) before merging, then
 re-verified live post-deploy. Full writeup: `docs/decisions.md` item 29.
 
-## Demo Video
+## Recorded Video
 
-Not yet recorded — Phase 11.
+https://youtu.be/WzC6yJBq8e0

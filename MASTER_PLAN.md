@@ -173,7 +173,7 @@ erDiagram
     POOL_MEMBERSHIPS {
         uuid id PK
         uuid pool_id FK
-        uuid ride_request_id FK UK "one ride request cannot join two pools"
+        uuid ride_request_id FK, UK "one ride request cannot join two pools"
         int seats "per-passenger allocation — see 3.2"
         datetime created_at
     }

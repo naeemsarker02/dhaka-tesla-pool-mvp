@@ -1,3 +1,9 @@
+// Decides which pool a new ride_request lands in: join a compatible OPEN pool on the same
+// pickup/destination cluster with a free seat, or open a new pool on an eligible ONLINE Tesla.
+// Key invariant: seats_occupied on a pool can never exceed its Tesla's capacity, and a Tesla can
+// never have more than one non-terminal pool at once — both enforced with SELECT ... FOR UPDATE
+// row locks under READ COMMITTED isolation (see matchRideRequest below for why REPEATABLE READ,
+// MySQL's default, isn't safe here even with the locks in place).
 const { Prisma } = require("@prisma/client");
 const { prisma } = require("../lib/prisma");
 
