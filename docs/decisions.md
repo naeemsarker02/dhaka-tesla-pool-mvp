@@ -751,3 +751,20 @@ circle, Active Trip card appearing/disappearing correctly across MATCHED→COMPL
 ✕ banner) end-to-end with real API calls before merging. Merged `feature/ui-final-polish` into
 `pre-release` (`--no-ff`), fast-forwarded `release/v1.0.0` to match, and re-verified live on Vercel
 (auto-deployed on push) and Render (unaffected — no `backend/` files changed) after the merge.
+
+### 30. Two root commits predate the commit-message convention (2026-09-27)
+
+**Context:** a full requirements-audit pass flagged the repo's first two commits,
+`04d9b27` ("first commit") and `5dd1f92` ("setup"), as not following the `type(scope): description`
+convention Section 11/`CLAUDE.md` require. Confirmed: both sit at the very base of `master`/`main`,
+before `3e6e530` (`docs(architecture): add system architecture diagram and layer notes`), which is
+the first commit in the repo's history to use the convention.
+
+**Decision: leave them as-is, do not rewrite.** They predate the convention being adopted at all —
+there was no rule yet to violate at the time they were made — and both are trivially small
+(`04d9b27` adds a 1-line `README.md`, `5dd1f92` is repo scaffolding), not a disguised dump of
+finished work. Rewriting them (`rebase -i`, amend, or squash) would mean rewriting already-pushed,
+shared history on `master`/`main`/`pre-release`/`release/v1.0.0` — a materially worse violation of
+this project's own git-safety rules than two odd early commit messages. Noted here instead, per the
+same "log it, don't hide it, don't rewrite published history" approach already used for item 27's
+direct-to-master commits.
