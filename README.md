@@ -493,11 +493,6 @@ local dev server with real API calls (the live Render backend's CORS allowlist o
 live Vercel origin, so this couldn't be checked against localhost directly) before merging, then
 re-verified live post-deploy. Full writeup: `docs/decisions.md` item 29.
 
-## Demo Video
+## Recorded Video
 
-[![Watch the demo](https://img.youtube.com/vi/WzC6yJBq8e0/maxresdefault.jpg)](https://youtu.be/WzC6yJBq8e0)
-
-[https://youtu.be/WzC6yJBq8e0](https://youtu.be/WzC6yJBq8e0) — 6-minute walkthrough covering the
-problem/users (0:00–1:00), architecture/backend/frontend/DB design and the ride/pool lifecycle
-(1:00–3:00), and a product tour of the passenger flow, driver flow, pooling, and one edge case
-(3:00–6:00), per the Section 13 script in `docs/DOCUMENTATION_PLAN.md`.
+https://youtu.be/WzC6yJBq8e0
