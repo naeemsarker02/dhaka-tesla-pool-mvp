@@ -1,3 +1,9 @@
+// Passenger-facing ride_request lifecycle: create, read, list, and cancel. Key invariants: a
+// passenger can only have one active (non-terminal, non-cancelled) ride_request at a time; a
+// created ride_request always keeps estimated_fare_paisa (no pool discount) separate from the
+// later-finalized fare_paisa; and cancellation is only ever valid from REQUESTED/MATCHED, done
+// atomically with the pool_membership release and seats_occupied decrement under READ COMMITTED
+// isolation so a concurrent cancellation on the same pool can't be missed (see below).
 const { Prisma } = require("@prisma/client");
 const { prisma } = require("../lib/prisma");
 const { getDistanceKm } = require("../data/zones");
