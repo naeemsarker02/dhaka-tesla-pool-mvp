@@ -768,3 +768,10 @@ shared history on `master`/`main`/`pre-release`/`release/v1.0.0` — a materiall
 this project's own git-safety rules than two odd early commit messages. Noted here instead, per the
 same "log it, don't hide it, don't rewrite published history" approach already used for item 27's
 direct-to-master commits.
+
+### 31. Demo video runs 8 minutes, over the brief's suggested 6:00 cap (2026-09-27)
+
+**Context:** the recorded demo video (`https://youtu.be/WzC6yJBq8e0`, linked in README's "Recorded
+Video" section) runs approximately 8 minutes. Section 13 of the raw brief and this project's own
+`docs/DOCUMENTATION_PLAN.md` (Section 4, "hard 6-minute cap") call for ≤6:00. Not silently labeled
+as 6 minutes in the README — the top-of-README link and this entry both state the actual length.

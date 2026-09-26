@@ -1,6 +1,6 @@
 # Dhaka Tesla Pool
 
-▶️ **[Watch the 6-minute demo video](https://youtu.be/WzC6yJBq8e0)**
+▶️ **[Watch the 8-minute demo video](https://youtu.be/WzC6yJBq8e0)**
 
 ## Summary
 
