@@ -50,4 +50,6 @@ master plan explicitly rule these out for the MVP. Scaling paths that *would* in
 
 ## Status
 
-Phase 0 (documentation) only. No backend/frontend code exists yet — see `docs/PROGRESS.md`.
+Built and deployed. This file was written at Phase 0, before any code existed, and never got a
+second pass once the implementation caught up — a common trap with plan-first documentation. See
+`docs/PROGRESS.md` for the real, phase-by-phase status.

@@ -15,6 +15,16 @@ verified end-to-end via CI (Phase 9 — no Docker installation is available in t
 environment, so GitHub Actions substitutes; see `.github/workflows/docker-verify.yml` and
 `docs/decisions.md` item 22, which also covers two real bugs that first CI run caught).**
 
+## Branch Guide
+
+`master` and `main` are the stable baseline — `main` exists because Vercel/GitHub default to it,
+`master` is the actual default here (see repo settings). `pre-release` is where day-to-day work
+lands and gets integration-tested before a release cut. `release/v1.0.0` is the frozen snapshot
+this submission points to — it's `pre-release` merged forward once a milestone is done, not a
+separate line of work. `feature/*` branches are short-lived, one per logical change, merged into
+`pre-release` with `--no-ff` and deleted once merged (see `docs/decisions.md` for the two
+documented exceptions where that didn't happen).
+
 ## Problem Statement
 
 Nusrat needs a ride from Banani to Mohakhali. Around the same time, Rafiq needs a ride from Banani
