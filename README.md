@@ -191,6 +191,16 @@ are gitignored.
 
 ## Local Setup (without Docker)
 
+**One-time hook setup** (after cloning):
+
+```bash
+git config core.hooksPath .githooks
+```
+
+This enables `.githooks/pre-commit`, which blocks commits of `.woff2`/`.woff`/`.ttf`/`.eot`/`.otf`
+files whose content doesn't match a real font's magic bytes — added after the security incident
+in `docs/decisions.md`.
+
 **Backend:**
 
 ```bash

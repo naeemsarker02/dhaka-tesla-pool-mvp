@@ -1,3 +1,12 @@
 # Shell scripts must always have LF line endings, even on Windows checkouts — CRLF breaks the
 # #!/bin/sh shebang inside Linux containers (Dockerfile ENTRYPOINT).
 *.sh text eol=lf
+.githooks/* text eol=lf
+
+# Font binaries: always diff as binary (never as text), and their magic-number content is
+# verified by .githooks/pre-commit — see docs/decisions.md for the incident that prompted this.
+*.woff2 binary
+*.woff binary
+*.ttf binary
+*.eot binary
+*.otf binary
