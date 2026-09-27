@@ -1,0 +1,48 @@
+#!/bin/sh
+# Verifies that any staged .woff2/.woff/.ttf/.eot/.otf file is actually a font binary,
+# by checking its magic number against known signatures. Blocks the commit otherwise.
+#
+# Added 2026-09-27 after a JS payload disguised as fa-solid-900.woff2 was found in the
+# repo (see docs/decisions.md). Enable with: git config core.hooksPath .githooks
+
+font_files=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.(woff2?|ttf|eot|otf)$')
+
+if [ -z "$font_files" ]; then
+  exit 0
+fi
+
+status=0
+
+for f in $font_files; do
+  magic=$(git show ":$f" | head -c 4 | od -An -tx1 | tr -d ' \n')
+
+  case "$f" in
+    *.woff2)
+      # 'wOF2'
+      expected="774f4632"
+      ;;
+    *.woff)
+      # 'wOFF'
+      expected="774f4646"
+      ;;
+    *.ttf)
+      # TrueType: 00010000, or OpenType-CFF-in-TTF: 'OTTO', or 'true'/'ttcf'
+      expected="00010000|4f54544f|74727565|74746366"
+      ;;
+    *.otf)
+      expected="4f54544f|00010000"
+      ;;
+    *.eot)
+      # EOT has no fixed leading magic; skip strict check but flag zero-length files
+      expected=".*"
+      ;;
+  esac
+
+  if ! printf '%s' "$magic" | grep -qE "^($expected)$"; then
+    echo "pre-commit: '$f' does not look like a real font file (magic bytes: $magic)." >&2
+    echo "            Refusing to commit a font file with non-font content." >&2
+    status=1
+  fi
+done
+
+exit $status
